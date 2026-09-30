@@ -20,17 +20,18 @@ package org.apache.maven.plugins.dependency.testUtils.stubs;
 
 import java.io.File;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.apache.maven.plugins.dependency.utils.markers.DefaultFileMarkerHandler;
 
 public class StubDefaultFileMarkerHandler extends DefaultFileMarkerHandler {
 
-    public StubDefaultFileMarkerHandler(Artifact artifact, File markerFilesDirectory) {
+    public StubDefaultFileMarkerHandler(DownloadedDependency artifact, File markerFilesDirectory) {
         super(artifact, markerFilesDirectory);
     }
 
     protected File getMarkerFile() {
         return new StubMarkerFile(
-                this.markerFilesDirectory, this.artifact.getId().replace(':', '-') + ".marker");
+                this.markerFilesDirectory, DependencyUtil.getId(this.artifact).replace(':', '-') + ".marker");
     }
 }

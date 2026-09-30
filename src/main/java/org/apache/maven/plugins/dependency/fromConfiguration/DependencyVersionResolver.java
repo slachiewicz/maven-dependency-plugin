@@ -28,54 +28,39 @@ import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
+import java.util.function.Supplier;
 import java.util.stream.Collectors;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.project.MavenProject;
-import org.eclipse.aether.DefaultRepositorySystemSession;
-import org.eclipse.aether.RepositorySystem;
-import org.eclipse.aether.artifact.ArtifactTypeRegistry;
-import org.eclipse.aether.collection.CollectRequest;
-import org.eclipse.aether.collection.DependencyCollectionException;
-import org.eclipse.aether.collection.DependencySelector;
-import org.eclipse.aether.graph.DependencyNode;
-import org.eclipse.aether.util.artifact.JavaScopes;
-import org.eclipse.aether.util.graph.manager.DependencyManagerUtils;
-import org.eclipse.aether.util.graph.selector.AndDependencySelector;
-import org.eclipse.aether.util.graph.selector.ExclusionDependencySelector;
-import org.eclipse.aether.util.graph.selector.OptionalDependencySelector;
-import org.eclipse.aether.util.graph.selector.ScopeDependencySelector;
-import org.eclipse.aether.util.graph.transformer.ConflictResolver;
-import org.eclipse.aether.util.graph.transformer.JavaScopeDeriver;
-import org.eclipse.aether.util.graph.transformer.JavaScopeSelector;
-import org.eclipse.aether.util.graph.transformer.NearestVersionSelector;
-import org.eclipse.aether.util.graph.transformer.SimpleOptionalitySelector;
+import org.apache.maven.api.DependencyCoordinates;
+import org.apache.maven.api.Node;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.services.DependencyResolver;
+import org.apache.maven.api.services.DependencyResolverRequest;
 
 final class DependencyVersionResolver {
-    private final MavenSession session;
+    private final Project project;
 
-    private final MavenProject project;
+    private final Supplier<Session> sessionSupplier;
 
-    private final RepositorySystem repositorySystem;
-
-    private final Map<ClasspathScope, Map<GroupArtifactKey, List<Artifact>>> artifactIndexByScope =
+    private final Map<ClasspathScope, Map<GroupArtifactKey, List<Variant>>> artifactIndexByScope =
             new EnumMap<>(ClasspathScope.class);
 
-    DependencyVersionResolver(MavenSession session, MavenProject project, RepositorySystem repositorySystem) {
-        this.session = session;
+    DependencyVersionResolver(Project project, Supplier<Session> sessionSupplier) {
         this.project = project;
-        this.repositorySystem = repositorySystem;
+        this.sessionSupplier = sessionSupplier;
     }
 
-    String resolveVersion(ArtifactItem artifactItem) throws MojoExecutionException {
-        List<Dependency> directDependencies = project.getDependencies();
-        List<Dependency> managedDependencies = project.getDependencyManagement() == null
-                ? Collections.emptyList()
-                : project.getDependencyManagement().getDependencies();
+    /**
+     * Finds the version of an artifact item, looking at the direct dependencies, the dependency management and
+     * finally the dependency graph of the requested classpath scopes.
+     */
+    String resolveVersion(ArtifactItem artifactItem) throws MojoException {
+        List<DependencyCoordinates> directDependencies =
+                project == null ? Collections.emptyList() : project.getDependencies();
+        List<DependencyCoordinates> managedDependencies =
+                project == null ? Collections.emptyList() : project.getManagedDependencies();
 
         String modelVersion = findModelVersion(artifactItem, directDependencies, false);
         if (modelVersion == null) {
@@ -103,12 +88,12 @@ final class DependencyVersionResolver {
         String scopeDescription = artifactItem.getDependencyScope() == null
                 ? "compile, runtime, or test dependency graph"
                 : artifactItem.getDependencyScope() + " dependency graph";
-        throw new MojoExecutionException("Unable to find artifact version of " + artifactItem.getGroupId() + ":"
+        throw new MojoException("Unable to find artifact version of " + artifactItem.getGroupId() + ":"
                 + artifactItem.getArtifactId() + " in direct dependencies, dependency management, or the project's "
                 + scopeDescription + ".");
     }
 
-    private List<ClasspathScope> requestedScopes(ArtifactItem artifactItem) throws MojoExecutionException {
+    private List<ClasspathScope> requestedScopes(ArtifactItem artifactItem) throws MojoException {
         String dependencyScope = artifactItem.getDependencyScope();
         if (dependencyScope == null || dependencyScope.isEmpty()) {
             List<ClasspathScope> scopes = new ArrayList<>(3);
@@ -118,18 +103,18 @@ final class DependencyVersionResolver {
         try {
             return Collections.singletonList(ClasspathScope.fromString(dependencyScope));
         } catch (IllegalArgumentException e) {
-            throw new MojoExecutionException(e.getMessage(), e);
+            throw new MojoException(e.getMessage(), e);
         }
     }
 
     private Map<ClasspathScope, Set<String>> findGraphVersions(
-            ArtifactItem artifactItem, List<ClasspathScope> scopes, boolean looseMatch) throws MojoExecutionException {
+            ArtifactItem artifactItem, List<ClasspathScope> scopes, boolean looseMatch) throws MojoException {
         Map<ClasspathScope, Set<String>> result = new LinkedHashMap<>();
-        GroupArtifactKey key = GroupArtifactKey.from(artifactItem);
+        GroupArtifactKey key = new GroupArtifactKey(artifactItem.getGroupId(), artifactItem.getArtifactId());
         for (ClasspathScope scope : scopes) {
-            List<Artifact> artifacts = artifactIndex(scope).get(key);
+            List<Variant> variants = artifactIndex(scope).get(key);
             Set<String> versions =
-                    artifacts == null ? Collections.emptySet() : matchingVersions(artifactItem, artifacts, looseMatch);
+                    variants == null ? Collections.emptySet() : matchingVersions(artifactItem, variants, looseMatch);
             if (!versions.isEmpty()) {
                 result.put(scope, versions);
             }
@@ -138,7 +123,7 @@ final class DependencyVersionResolver {
     }
 
     private String uniqueVersion(ArtifactItem artifactItem, Map<ClasspathScope, Set<String>> versions)
-            throws MojoExecutionException {
+            throws MojoException {
         Set<String> uniqueVersions = versions.values().stream()
                 .flatMap(Collection::stream)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
@@ -149,103 +134,114 @@ final class DependencyVersionResolver {
         String selections = versions.entrySet().stream()
                 .map(entry -> entry.getKey() + "=" + String.join(",", entry.getValue()))
                 .collect(Collectors.joining(", "));
-        throw new MojoExecutionException("Dependency graphs select different versions of " + artifactItem.getGroupId()
-                + ":" + artifactItem.getArtifactId() + " (" + selections
+        throw new MojoException("Dependency graphs select different versions of " + artifactItem.getGroupId() + ":"
+                + artifactItem.getArtifactId() + " (" + selections
                 + "). Set dependencyScope to compile, runtime, or test, or specify version explicitly.");
     }
 
-    private Map<GroupArtifactKey, List<Artifact>> artifactIndex(ClasspathScope scope) throws MojoExecutionException {
-        Map<GroupArtifactKey, List<Artifact>> cached = artifactIndexByScope.get(scope);
+    private Map<GroupArtifactKey, List<Variant>> artifactIndex(ClasspathScope scope) throws MojoException {
+        Map<GroupArtifactKey, List<Variant>> cached = artifactIndexByScope.get(scope);
         if (cached != null) {
             return cached;
         }
 
-        DefaultRepositorySystemSession repositorySession =
-                new DefaultRepositorySystemSession(session.getRepositorySession());
-        repositorySession.setDependencySelector(dependencySelector(scope));
-        repositorySession.setDependencyGraphTransformer(new ConflictResolver(
-                new NearestVersionSelector(),
-                new JavaScopeSelector(),
-                new SimpleOptionalitySelector(),
-                new JavaScopeDeriver()));
-        repositorySession.setConfigProperty(ConflictResolver.CONFIG_PROP_VERBOSE, false);
-        repositorySession.setConfigProperty(DependencyManagerUtils.CONFIG_PROP_VERBOSE, false);
-
-        ArtifactTypeRegistry stereotypes = repositorySession.getArtifactTypeRegistry();
-        CollectRequest request = new CollectRequest();
-        request.setRootArtifact(RepositoryUtils.toArtifact(project.getArtifact()));
-        request.setRepositories(RepositoryUtils.toRepos(project.getRemoteArtifactRepositories()));
-        for (Dependency dependency : project.getDependencies()) {
-            request.addDependency(RepositoryUtils.toDependency(dependency, stereotypes));
-        }
-        if (project.getDependencyManagement() != null) {
-            for (Dependency dependency : project.getDependencyManagement().getDependencies()) {
-                request.addManagedDependency(RepositoryUtils.toDependency(dependency, stereotypes));
-            }
-        }
-
+        Session session = sessionSupplier.get();
         try {
-            DependencyNode root = repositorySystem
-                    .collectDependencies(repositorySession, request)
+            // the path scope restricts the dependency scopes while the graph is collected, so dependencies that are
+            // not on that classpath do not take part in the version mediation
+            Node root = session.getService(DependencyResolver.class)
+                    .collect(DependencyResolverRequest.builder()
+                            .session(session)
+                            .requestType(DependencyResolverRequest.RequestType.COLLECT)
+                            .project(project)
+                            .pathScope(scope.pathScope())
+                            .build())
                     .getRoot();
-            List<Artifact> collected = new ArrayList<>();
-            collectArtifacts(root, collected, true);
-            Map<GroupArtifactKey, List<Artifact>> index = indexArtifacts(collected);
+            List<Variant> collected = new ArrayList<>();
+            collectVariants(root, collected, true);
+            Map<GroupArtifactKey, List<Variant>> index = indexVariants(collected);
             artifactIndexByScope.put(scope, index);
             return index;
-        } catch (DependencyCollectionException e) {
-            throw new MojoExecutionException("Unable to collect the project's " + scope + " dependency graph.", e);
+        } catch (RuntimeException e) {
+            throw new MojoException("Unable to collect the project's " + scope + " dependency graph.", e);
         }
     }
 
-    private DependencySelector dependencySelector(ClasspathScope scope) {
-        return new AndDependencySelector(
-                new ClasspathDependencySelector(scope),
-                new ScopeDependencySelector(JavaScopes.TEST, JavaScopes.PROVIDED),
-                new OptionalDependencySelector(),
-                new ExclusionDependencySelector());
-    }
-
-    private void collectArtifacts(DependencyNode node, List<Artifact> artifacts, boolean root) {
+    private void collectVariants(Node node, List<Variant> variants, boolean root) {
         if (!root && node.getArtifact() != null) {
-            artifacts.add(RepositoryUtils.toArtifact(node.getArtifact()));
+            String type = node.getDependency() != null && node.getDependency().getType() != null
+                    ? node.getDependency().getType().id()
+                    : node.getArtifact().getExtension();
+            variants.add(new Variant(
+                    node.getArtifact().getGroupId(),
+                    node.getArtifact().getArtifactId(),
+                    node.getArtifact().getVersion().toString(),
+                    type,
+                    node.getArtifact().getClassifier()));
         }
-        for (DependencyNode child : node.getChildren()) {
-            collectArtifacts(child, artifacts, false);
+        for (Node child : node.getChildren()) {
+            collectVariants(child, variants, false);
         }
     }
 
-    static Map<GroupArtifactKey, List<Artifact>> indexArtifacts(Collection<Artifact> artifacts) {
-        Map<GroupArtifactKey, List<Artifact>> index = new LinkedHashMap<>();
-        for (Artifact artifact : artifacts) {
-            index.computeIfAbsent(GroupArtifactKey.from(artifact), key -> new ArrayList<>())
-                    .add(artifact);
+    static Map<GroupArtifactKey, List<Variant>> indexVariants(Collection<Variant> variants) {
+        Map<GroupArtifactKey, List<Variant>> index = new LinkedHashMap<>();
+        for (Variant variant : variants) {
+            index.computeIfAbsent(new GroupArtifactKey(variant.groupId, variant.artifactId), key -> new ArrayList<>())
+                    .add(variant);
         }
-        for (Map.Entry<GroupArtifactKey, List<Artifact>> entry : index.entrySet()) {
+        for (Map.Entry<GroupArtifactKey, List<Variant>> entry : index.entrySet()) {
             entry.setValue(Collections.unmodifiableList(entry.getValue()));
         }
         return Collections.unmodifiableMap(index);
     }
 
-    static Set<String> matchingVersions(ArtifactItem artifactItem, List<Artifact> artifacts, boolean looseMatch) {
-        return artifacts.stream()
-                .filter(artifact -> looseMatch
-                        || (Objects.equals(artifact.getClassifier(), artifactItem.getClassifier())
-                                && Objects.equals(artifact.getType(), artifactItem.getType())))
-                .map(Artifact::getVersion)
+    static Set<String> matchingVersions(ArtifactItem artifactItem, List<Variant> variants, boolean looseMatch) {
+        return variants.stream()
+                .filter(variant -> looseMatch
+                        || (Objects.equals(emptyToNull(variant.classifier), artifactItem.getClassifier())
+                                && Objects.equals(variant.type, artifactItem.getType())))
+                .map(variant -> variant.version)
                 .collect(Collectors.toCollection(LinkedHashSet::new));
     }
 
-    private String findModelVersion(ArtifactItem artifactItem, List<Dependency> dependencies, boolean looseMatch) {
-        for (Dependency dependency : dependencies) {
+    private static String emptyToNull(String value) {
+        return value == null || value.isEmpty() ? null : value;
+    }
+
+    private String findModelVersion(
+            ArtifactItem artifactItem, List<DependencyCoordinates> dependencies, boolean looseMatch) {
+        for (DependencyCoordinates dependency : dependencies) {
             if (Objects.equals(dependency.getArtifactId(), artifactItem.getArtifactId())
                     && Objects.equals(dependency.getGroupId(), artifactItem.getGroupId())
-                    && (looseMatch || Objects.equals(dependency.getClassifier(), artifactItem.getClassifier()))
-                    && (looseMatch || Objects.equals(dependency.getType(), artifactItem.getType()))) {
-                return dependency.getVersion();
+                    && (looseMatch
+                            || Objects.equals(emptyToNull(dependency.getClassifier()), artifactItem.getClassifier()))
+                    && (looseMatch || Objects.equals(dependency.getType().id(), artifactItem.getType()))) {
+                return dependency.getVersionConstraint().toString();
             }
         }
         return null;
+    }
+
+    /** A dependency node of a collected graph, reduced to what the version lookup compares. */
+    static final class Variant {
+        private final String groupId;
+
+        private final String artifactId;
+
+        private final String version;
+
+        private final String type;
+
+        private final String classifier;
+
+        Variant(String groupId, String artifactId, String version, String type, String classifier) {
+            this.groupId = groupId;
+            this.artifactId = artifactId;
+            this.version = version;
+            this.type = type;
+            this.classifier = classifier;
+        }
     }
 
     static final class GroupArtifactKey {
@@ -253,17 +249,9 @@ final class DependencyVersionResolver {
 
         private final String artifactId;
 
-        private GroupArtifactKey(String groupId, String artifactId) {
+        GroupArtifactKey(String groupId, String artifactId) {
             this.groupId = groupId;
             this.artifactId = artifactId;
-        }
-
-        static GroupArtifactKey from(ArtifactItem artifactItem) {
-            return new GroupArtifactKey(artifactItem.getGroupId(), artifactItem.getArtifactId());
-        }
-
-        static GroupArtifactKey from(Artifact artifact) {
-            return new GroupArtifactKey(artifact.getGroupId(), artifact.getArtifactId());
         }
 
         @Override

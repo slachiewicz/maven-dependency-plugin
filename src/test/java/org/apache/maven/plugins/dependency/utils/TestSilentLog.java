@@ -18,7 +18,7 @@
  */
 package org.apache.maven.plugins.dependency.utils;
 
-import org.apache.maven.plugin.logging.Log;
+import org.apache.maven.api.plugin.Log;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;

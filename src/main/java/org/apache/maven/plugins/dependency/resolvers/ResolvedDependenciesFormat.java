@@ -25,7 +25,8 @@ import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedDependency;
 import org.apache.maven.plugins.dependency.utils.DependencyStatusSets;
 
 /**
@@ -40,10 +41,10 @@ final class ResolvedDependenciesFormat {
 
     static final String POM = "pom";
 
-    private static final Comparator<Artifact> BY_COORDINATES = Comparator.comparing(Artifact::getGroupId)
-            .thenComparing(Artifact::getArtifactId)
-            .thenComparing(Artifact::getVersion)
-            .thenComparing(Artifact::getType)
+    private static final Comparator<Dependency> BY_COORDINATES = Comparator.comparing(Dependency::getGroupId)
+            .thenComparing(Dependency::getArtifactId)
+            .thenComparing(a -> a.getVersion().toString())
+            .thenComparing(ResolvedDependenciesFormat::typeId)
             .thenComparing(a -> Objects.toString(a.getClassifier(), ""));
 
     private ResolvedDependenciesFormat() {}
@@ -73,26 +74,30 @@ final class ResolvedDependenciesFormat {
     }
 
     private static StringBuilder jsonArray(
-            StringBuilder sb, String name, Collection<Artifact> artifacts, boolean withFile, boolean sort) {
+            StringBuilder sb, String name, Collection<Dependency> artifacts, boolean withFile, boolean sort) {
         String nl = System.lineSeparator();
-        List<Artifact> list = ordered(artifacts, sort);
+        List<Dependency> list = ordered(artifacts, sort);
         sb.append("  \"").append(name).append("\": [");
         if (list.isEmpty()) {
             return sb.append("]");
         }
         sb.append(nl);
         for (int i = 0; i < list.size(); i++) {
-            Artifact artifact = list.get(i);
+            Dependency artifact = list.get(i);
             List<String[]> members = new ArrayList<>();
             members.add(new String[] {"groupId", artifact.getGroupId()});
             members.add(new String[] {"artifactId", artifact.getArtifactId()});
-            members.add(new String[] {"version", artifact.getVersion()});
-            members.add(new String[] {"type", artifact.getType()});
-            members.add(new String[] {"scope", artifact.getScope()});
+            members.add(new String[] {"version", artifact.getVersion().toString()});
+            members.add(new String[] {"type", typeId(artifact)});
+            members.add(new String[] {"scope", scopeId(artifact)});
             members.add(new String[] {"classifier", artifact.getClassifier()});
             members.add(new String[] {"optional", String.valueOf(artifact.isOptional())});
-            if (withFile && artifact.getFile() != null) {
-                members.add(new String[] {"file", artifact.getFile().getAbsolutePath()});
+            if (withFile
+                    && artifact instanceof DownloadedDependency
+                    && ((DownloadedDependency) artifact).getPath() != null) {
+                members.add(new String[] {
+                    "file", ((DownloadedDependency) artifact).getPath().toFile().getAbsolutePath()
+                });
             }
             sb.append("    {").append(nl);
             for (int j = 0; j < members.size(); j++) {
@@ -119,7 +124,7 @@ final class ResolvedDependenciesFormat {
     static String pom(DependencyStatusSets sets, boolean sort) {
         String nl = System.lineSeparator();
         StringBuilder sb = new StringBuilder("<dependencies>").append(nl);
-        for (Artifact artifact : ordered(sets.getResolvedDependencies(), sort)) {
+        for (Dependency artifact : ordered(sets.getResolvedDependencies(), sort)) {
             if (artifact.getScope() == null) {
                 // not a dependency of the project, such as a parent POM listed by includeParents
                 continue;
@@ -127,15 +132,15 @@ final class ResolvedDependenciesFormat {
             sb.append("  <dependency>").append(nl);
             element(sb, "groupId", artifact.getGroupId());
             element(sb, "artifactId", artifact.getArtifactId());
-            element(sb, "version", artifact.getBaseVersion());
-            if (!"jar".equals(artifact.getType())) {
-                element(sb, "type", artifact.getType());
+            element(sb, "version", artifact.getBaseVersion().toString());
+            if (!"jar".equals(typeId(artifact))) {
+                element(sb, "type", typeId(artifact));
             }
-            if (artifact.hasClassifier()) {
+            if (artifact.getClassifier() != null && !artifact.getClassifier().isEmpty()) {
                 element(sb, "classifier", artifact.getClassifier());
             }
-            if (!Artifact.SCOPE_COMPILE.equals(artifact.getScope())) {
-                element(sb, "scope", artifact.getScope());
+            if (!"compile".equals(scopeId(artifact))) {
+                element(sb, "scope", scopeId(artifact));
             }
             if (artifact.isOptional()) {
                 element(sb, "optional", "true");
@@ -143,6 +148,14 @@ final class ResolvedDependenciesFormat {
             sb.append("  </dependency>").append(nl);
         }
         return sb.append("</dependencies>").append(nl).toString();
+    }
+
+    private static String typeId(Dependency artifact) {
+        return artifact.getType() != null ? artifact.getType().id() : artifact.getExtension();
+    }
+
+    private static String scopeId(Dependency artifact) {
+        return artifact.getScope() == null ? null : artifact.getScope().id();
     }
 
     private static void element(StringBuilder sb, String name, String value) {
@@ -156,11 +169,11 @@ final class ResolvedDependenciesFormat {
                 .append(System.lineSeparator());
     }
 
-    private static List<Artifact> ordered(Collection<Artifact> artifacts, boolean sort) {
+    private static List<Dependency> ordered(Collection<Dependency> artifacts, boolean sort) {
         if (artifacts == null) {
             return Collections.emptyList();
         }
-        List<Artifact> list = new ArrayList<>(artifacts);
+        List<Dependency> list = new ArrayList<>(artifacts);
         if (sort) {
             list.sort(BY_COORDINATES);
         }

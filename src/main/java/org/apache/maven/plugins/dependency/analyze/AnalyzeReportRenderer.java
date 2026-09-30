@@ -20,27 +20,27 @@ package org.apache.maven.plugins.dependency.analyze;
 
 import java.util.Collection;
 import java.util.Locale;
+import java.util.ResourceBundle;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Dependency;
 import org.apache.maven.doxia.sink.Sink;
 import org.apache.maven.reporting.AbstractMavenReportRenderer;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalysis;
-import org.codehaus.plexus.i18n.I18N;
 
 /**
  * This is the view part of the analyze-report mojo. It generates the HTML report for the project website. The HTML
  * output is same as the CLI output.
  */
 public class AnalyzeReportRenderer extends AbstractMavenReportRenderer {
-    private final I18N i18n;
+    private final ResourceBundle bundle;
 
     private final Locale locale;
 
     private final ProjectDependencyAnalysis analysis;
 
-    public AnalyzeReportRenderer(Sink sink, I18N i18n, Locale locale, ProjectDependencyAnalysis analysis) {
+    public AnalyzeReportRenderer(Sink sink, Locale locale, ProjectDependencyAnalysis analysis) {
         super(sink);
-        this.i18n = i18n;
+        this.bundle = ResourceBundle.getBundle("analyze-report", locale);
         this.locale = locale;
         this.analysis = analysis;
     }
@@ -55,7 +55,7 @@ public class AnalyzeReportRenderer extends AbstractMavenReportRenderer {
      * @return the translated string
      */
     private String getI18nString(String key) {
-        return i18n.getString("analyze-report", locale, "report.analyze." + key);
+        return bundle.getString("report.analyze." + key);
     }
 
     protected void renderBody() {
@@ -103,19 +103,19 @@ public class AnalyzeReportRenderer extends AbstractMavenReportRenderer {
         endSection();
     }
 
-    private void renderDependenciesTable(Sink sink, Collection<Artifact> artifacts) {
+    private void renderDependenciesTable(Sink sink, Collection<Dependency> artifacts) {
         startTable();
 
         tableHeader(new String[] {"GroupId", "ArtifactId", "Version", "Scope", "Classifier", "Type", "Optional"});
 
-        for (Artifact artifact : artifacts) {
+        for (Dependency artifact : artifacts) {
             tableRow(new String[] {
                 artifact.getGroupId(),
                 artifact.getArtifactId(),
-                artifact.getVersion(),
-                artifact.getScope(),
+                artifact.getVersion().toString(),
+                artifact.getScope().id(),
                 artifact.getClassifier(),
-                artifact.getType(),
+                artifact.getType().id(),
                 artifact.isOptional() ? "" : "false"
             });
         }

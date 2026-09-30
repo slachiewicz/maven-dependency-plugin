@@ -23,35 +23,26 @@ import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
-import org.apache.maven.artifact.versioning.VersionRange;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class PatternsArtifactsFilterTest {
 
-    private final Artifact spring = artifact("org.springframework", "spring-core", "6.1.0");
+    private final Dependency spring = artifact("org.springframework", "spring-core", "6.1.0");
 
-    private final Artifact snapshot = artifact("org.acme", "lib", "1.0-SNAPSHOT");
+    private final Dependency snapshot = artifact("org.acme", "lib", "1.0-SNAPSHOT");
 
-    private final Artifact guava = artifact("com.google.guava", "guava", "33.0.0");
+    private final Dependency guava = artifact("com.google.guava", "guava", "33.0.0");
 
-    private Set<Artifact> all() {
+    private Set<Dependency> all() {
         return new LinkedHashSet<>(Arrays.asList(spring, snapshot, guava));
     }
 
-    private static Artifact artifact(String groupId, String artifactId, String version) {
-        return new DefaultArtifact(
-                groupId,
-                artifactId,
-                VersionRange.createFromVersion(version),
-                "compile",
-                "jar",
-                null,
-                new DefaultArtifactHandler("jar"));
+    private static Dependency artifact(String groupId, String artifactId, String version) {
+        return DependencyStubs.dependency(groupId, artifactId, version, "compile", "jar", null);
     }
 
     @Test
@@ -61,25 +52,25 @@ class PatternsArtifactsFilterTest {
 
     @Test
     void includesKeepMatchingGroupId() throws Exception {
-        Set<Artifact> result = new PatternsArtifactsFilter(Arrays.asList("org.springframework"), null).filter(all());
+        Set<Dependency> result = new PatternsArtifactsFilter(Arrays.asList("org.springframework"), null).filter(all());
         assertEquals(Collections.singleton(spring), result);
     }
 
     @Test
     void includesMatchSnapshotVersions() throws Exception {
-        Set<Artifact> result = new PatternsArtifactsFilter(Arrays.asList(":::*-SNAPSHOT"), null).filter(all());
+        Set<Dependency> result = new PatternsArtifactsFilter(Arrays.asList(":::*-SNAPSHOT"), null).filter(all());
         assertEquals(Collections.singleton(snapshot), result);
     }
 
     @Test
     void excludesRemoveMatching() throws Exception {
-        Set<Artifact> result = new PatternsArtifactsFilter(null, Arrays.asList("org.*")).filter(all());
+        Set<Dependency> result = new PatternsArtifactsFilter(null, Arrays.asList("org.*")).filter(all());
         assertEquals(Collections.singleton(guava), result);
     }
 
     @Test
     void excludeTakesPrecedenceOverInclude() throws Exception {
-        Set<Artifact> result =
+        Set<Dependency> result =
                 new PatternsArtifactsFilter(Arrays.asList("org.*"), Arrays.asList("org.acme")).filter(all());
         assertEquals(Collections.singleton(spring), result);
     }

@@ -18,8 +18,8 @@
  */
 package org.apache.maven.plugins.dependency.utils.markers;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.plugin.MojoException;
 
 /**
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
@@ -27,30 +27,30 @@ import org.apache.maven.plugin.MojoExecutionException;
 public interface MarkerHandler {
     /**
      * @return true/false
-     * @throws MojoExecutionException in case of an error
+     * @throws MojoException in case of an error
      */
-    boolean isMarkerSet() throws MojoExecutionException;
+    boolean isMarkerSet() throws MojoException;
 
     /**
-     * @throws MojoExecutionException in case of an error
+     * @throws MojoException in case of an error
      */
-    void setMarker() throws MojoExecutionException;
+    void setMarker() throws MojoException;
 
     /**
      * @return true/false
-     * @throws MojoExecutionException in case of an error
+     * @throws MojoException in case of an error
      */
-    boolean clearMarker() throws MojoExecutionException;
+    boolean clearMarker() throws MojoException;
 
     /**
-     * @param artifact {@link Artifact}
+     * @param artifact {@link DownloadedDependency}
      * @return true/false
-     * @throws MojoExecutionException in case of an error
+     * @throws MojoException in case of an error
      */
-    boolean isMarkerOlder(Artifact artifact) throws MojoExecutionException;
+    boolean isMarkerOlder(DownloadedDependency artifact) throws MojoException;
 
     /**
-     * @param artifact {@link Artifact}
+     * @param artifact {@link DownloadedDependency}
      */
-    void setArtifact(Artifact artifact);
+    void setArtifact(DownloadedDependency artifact);
 }

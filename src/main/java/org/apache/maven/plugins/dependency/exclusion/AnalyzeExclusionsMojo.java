@@ -18,34 +18,38 @@
  */
 package org.apache.maven.plugins.dependency.exclusion;
 
-import javax.inject.Inject;
-
 import java.net.URI;
+import java.nio.file.FileSystemNotFoundException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.function.Consumer;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.DependencyManagement;
-import org.apache.maven.model.Exclusion;
-import org.apache.maven.model.InputSource;
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.apache.maven.project.MavenProject;
-import org.eclipse.aether.artifact.ArtifactTypeRegistry;
-import org.eclipse.aether.collection.DependencyCollectionException;
+import org.apache.maven.api.DependencyCoordinates;
+import org.apache.maven.api.Node;
+import org.apache.maven.api.PathScope;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.model.Dependency;
+import org.apache.maven.api.model.DependencyManagement;
+import org.apache.maven.api.model.Exclusion;
+import org.apache.maven.api.model.InputSource;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.DependencyCoordinatesFactory;
+import org.apache.maven.api.services.DependencyCoordinatesFactoryRequest;
+import org.apache.maven.api.services.DependencyResolver;
+import org.apache.maven.api.services.DependencyResolverRequest;
 
 import static java.util.stream.Collectors.toList;
 import static java.util.stream.Collectors.toSet;
@@ -60,21 +64,20 @@ import static org.apache.maven.plugins.dependency.exclusion.Coordinates.coordina
  *
  * @since 3.7.0
  */
-@Mojo(name = "analyze-exclusions", requiresDependencyCollection = ResolutionScope.TEST, threadSafe = true)
-public class AnalyzeExclusionsMojo extends AbstractMojo {
-
-    private final MavenProject project;
-
-    private final ResolverUtil resolverUtil;
-
-    private final MavenSession session;
+@Mojo(name = "analyze-exclusions")
+public class AnalyzeExclusionsMojo implements org.apache.maven.api.plugin.Mojo {
 
     @Inject
-    public AnalyzeExclusionsMojo(MavenProject project, ResolverUtil resolverUtil, MavenSession session) {
-        this.project = project;
-        this.resolverUtil = resolverUtil;
-        this.session = session;
-    }
+    private Project project;
+
+    @Inject
+    private Session session;
+
+    @Inject
+    private Log log;
+
+    @Inject
+    private DependencyResolver dependencyResolver;
 
     /**
      * Whether to fail the build if invalid exclusions is found.
@@ -103,20 +106,20 @@ public class AnalyzeExclusionsMojo extends AbstractMojo {
     private Path projectPom;
 
     @Override
-    public void execute() throws MojoExecutionException {
+    public void execute() throws MojoException {
         if (skip) {
-            getLog().debug("Skipping execution");
+            log.debug("Skipping execution");
             return;
         }
 
         projectModelId = project.getGroupId() + ":" + project.getArtifactId() + ":" + project.getVersion();
-        projectPom = project.getFile() != null
-                ? project.getFile().toPath().toAbsolutePath().normalize()
+        projectPom = project.getPomPath() != null
+                ? project.getPomPath().toAbsolutePath().normalize()
                 : null;
 
         Map<Coordinates, Collection<Exclusion>> dependenciesWithExclusions = new HashMap<>();
 
-        DependencyManagement depMgt = project.getDependencyManagement();
+        DependencyManagement depMgt = project.getModel().getDependencyManagement();
         if (depMgt != null) {
             List<Dependency> depMgtDependencies = depMgt.getDependencies();
 
@@ -132,7 +135,7 @@ public class AnalyzeExclusionsMojo extends AbstractMojo {
             }
         }
 
-        project.getDependencies().forEach(dependency -> {
+        project.getModel().getDependencies().forEach(dependency -> {
             Collection<Exclusion> exclusions = getExclusionsForDependency(dependency);
             if (!exclusions.isEmpty()) {
                 dependenciesWithExclusions
@@ -142,31 +145,17 @@ public class AnalyzeExclusionsMojo extends AbstractMojo {
         });
 
         if (dependenciesWithExclusions.isEmpty()) {
-            getLog().debug("No dependencies defined with exclusions - exiting");
+            log.debug("No dependencies defined with exclusions - exiting");
             return;
         }
 
         ExclusionChecker checker = new ExclusionChecker();
 
-        ArtifactTypeRegistry artifactTypeRegistry =
-                session.getRepositorySession().getArtifactTypeRegistry();
         for (Map.Entry<Coordinates, Collection<Exclusion>> entry : dependenciesWithExclusions.entrySet()) {
 
             Coordinates currentCoordinates = entry.getKey();
 
-            Collection<org.eclipse.aether.graph.Dependency> actualDependencies;
-            try {
-                actualDependencies = resolverUtil.collectDependencies(
-                        RepositoryUtils.toDependency(currentCoordinates.getDependency(), artifactTypeRegistry)
-                                .setExclusions(null));
-            } catch (DependencyCollectionException e) {
-                throw new MojoExecutionException(e.getMessage(), e);
-            }
-
-            Set<Coordinates> actualCoordinates = actualDependencies.stream()
-                    .map(org.eclipse.aether.graph.Dependency::getArtifact)
-                    .map(a -> coordinates(a.getGroupId(), a.getArtifactId()))
-                    .collect(toSet());
+            Set<Coordinates> actualCoordinates = collectDependencies(currentCoordinates.getDependency());
 
             Set<Coordinates> exclusions =
                     entry.getValue().stream().map(Coordinates::coordinates).collect(toSet());
@@ -176,14 +165,102 @@ public class AnalyzeExclusionsMojo extends AbstractMojo {
 
         if (!checker.getViolations().isEmpty()) {
             if (exclusionFail) {
-                logViolations(project.getName(), checker.getViolations(), value -> getLog().error(value));
-                throw new MojoExecutionException("Invalid exclusions found");
+                logViolations(projectName(), checker.getViolations(), value -> log.error(value));
+                throw new MojoException("Invalid exclusions found");
             } else {
-                logViolations(project.getName(), checker.getViolations(), value -> getLog().warn(value));
+                logViolations(projectName(), checker.getViolations(), value -> log.warn(value));
             }
         } else {
-            getLog().info("No problems with dependencies exclusions");
+            log.info("No problems with dependencies exclusions");
         }
+    }
+
+    /**
+     * Collects the dependency and its transitive dependencies, ignoring the exclusions of the dependency.
+     */
+    private Set<Coordinates> collectDependencies(Dependency dependency) throws MojoException {
+        try {
+            DependencyCoordinates root = session.createDependencyCoordinates(session.createArtifactCoordinates(
+                    dependency.getGroupId(),
+                    dependency.getArtifactId(),
+                    dependency.getVersion(),
+                    dependency.getClassifier(),
+                    null,
+                    dependency.getType()));
+            Node rootNode = dependencyResolver
+                    .collect(DependencyResolverRequest.builder()
+                            .session(session)
+                            .requestType(DependencyResolverRequest.RequestType.COLLECT)
+                            .dependency(root)
+                            .managedDependencies(managedDependencies(dependency))
+                            .pathScope(PathScope.TEST_RUNTIME)
+                            .build())
+                    .getRoot();
+            Set<Coordinates> coordinates = new HashSet<>();
+            rootNode.accept(new org.apache.maven.api.NodeVisitor() {
+                @Override
+                public boolean enter(Node node) {
+                    if (node.getArtifact() != null) {
+                        coordinates.add(coordinates(
+                                node.getArtifact().getGroupId(),
+                                node.getArtifact().getArtifactId()));
+                    }
+                    return true;
+                }
+
+                @Override
+                public boolean leave(Node node) {
+                    return true;
+                }
+            });
+            return coordinates;
+        } catch (RuntimeException e) {
+            throw new MojoException(e.getMessage(), e);
+        }
+    }
+
+    /**
+     * The project's dependency management, so that managed versions of transitive dependencies apply while the
+     * dependency is collected. The entry that manages the dependency itself loses its exclusions, as the dependency is
+     * collected ignoring them.
+     */
+    private List<DependencyCoordinates> managedDependencies(Dependency dependency) {
+        List<DependencyCoordinates> result = new ArrayList<>();
+        for (DependencyCoordinates managed : project.getManagedDependencies()) {
+            boolean sameArtifact = Objects.equals(managed.getGroupId(), dependency.getGroupId())
+                    && Objects.equals(managed.getArtifactId(), dependency.getArtifactId())
+                    && Objects.equals(managed.getType().id(), dependency.getType())
+                    && Objects.equals(emptyToNull(managed.getClassifier()), emptyToNull(dependency.getClassifier()));
+            if (sameArtifact && !managed.getExclusions().isEmpty()) {
+                result.add(session.getService(DependencyCoordinatesFactory.class)
+                        .create(DependencyCoordinatesFactoryRequest.builder()
+                                .session(session)
+                                .groupId(managed.getGroupId())
+                                .artifactId(managed.getArtifactId())
+                                .version(managed.getVersionConstraint().toString())
+                                .classifier(managed.getClassifier())
+                                .type(managed.getType().id())
+                                .scope(
+                                        managed.getScope() == null
+                                                ? null
+                                                : managed.getScope().id())
+                                .optional(Boolean.TRUE.equals(managed.getOptional()))
+                                .build()));
+            } else {
+                result.add(managed);
+            }
+        }
+        return result;
+    }
+
+    private static String emptyToNull(String value) {
+        return value == null || value.isEmpty() ? null : value;
+    }
+
+    private String projectName() {
+        // like MavenProject#getName(): the artifactId when the project has no name
+        String name = project.getModel().getName();
+        return name != null ? name : project.getArtifactId();
     }
 
     private Collection<Exclusion> getExclusionsForDependency(Dependency dependency) {
@@ -203,10 +280,10 @@ public class AnalyzeExclusionsMojo extends AbstractMojo {
             return false;
         }
         try {
-            // Maven 3 reports a file path, Maven 4 a file: URI
+            // a file path or a file: URI, depending on the Maven version that built the model
             Path path = location.startsWith("file:") ? Paths.get(URI.create(location)) : Paths.get(location);
             return projectPom.equals(path.toAbsolutePath().normalize());
-        } catch (IllegalArgumentException e) {
+        } catch (IllegalArgumentException | FileSystemNotFoundException e) {
             return false;
         }
     }

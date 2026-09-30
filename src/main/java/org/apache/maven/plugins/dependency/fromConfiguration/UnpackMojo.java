@@ -18,28 +18,18 @@
  */
 package org.apache.maven.plugins.dependency.fromConfiguration;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.util.List;
 
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.utils.UnpackUtil;
 import org.apache.maven.plugins.dependency.utils.filters.ArtifactItemFilter;
 import org.apache.maven.plugins.dependency.utils.filters.MarkerFileFilter;
 import org.apache.maven.plugins.dependency.utils.markers.MarkerHandler;
 import org.apache.maven.plugins.dependency.utils.markers.UnpackFileMarkerHandler;
-import org.apache.maven.project.MavenProject;
 import org.codehaus.plexus.components.io.filemappers.FileMapper;
-import org.eclipse.aether.RepositorySystem;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Goal that retrieves a list of artifacts from the repository and unpacks them in a defined location.
@@ -47,10 +37,8 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  * @since 1.0
  */
-@Mojo(name = "unpack", defaultPhase = LifecyclePhase.PROCESS_SOURCES, requiresProject = false, threadSafe = true)
+@Mojo(name = "unpack", defaultPhase = "process-sources", projectRequired = false)
 public class UnpackMojo extends AbstractFromConfigurationMojo {
-
-    private final UnpackUtil unpackUtil;
 
     /**
      * Directory to store flag files after unpack.
@@ -139,43 +127,32 @@ public class UnpackMojo extends AbstractFromConfigurationMojo {
     @Parameter(property = "artifact")
     private String artifact;
 
-    @Inject
-    public UnpackMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ArtifactHandlerManager artifactHandlerManager,
-            UnpackUtil unpackUtil,
-            RepositorySystem repositorySystem,
-            ResolverUtil resolverUtil) {
-        super(session, buildContext, project, artifactHandlerManager, repositorySystem, resolverUtil);
-        this.unpackUtil = unpackUtil;
-    }
-
     /**
      * Main entry into mojo. This method gets the ArtifactItems and iterates through each one passing it to
      * unpackArtifact.
      *
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      * @see ArtifactItem
      * @see #getArtifactItems
-     * @see #unpackArtifact(ArtifactItem)
+     * @see #unpackArtifact(ArtifactItem, UnpackUtil)
      */
     @Override
-    protected void doExecute() throws MojoExecutionException, MojoFailureException {
+    protected void doExecute() throws MojoException {
         if (isSkip()) {
             return;
         }
 
         verifyRequirements();
         verifyExplicitDependencies();
+        verifyExplicitDependencies();
 
+        UnpackUtil unpackUtil = UnpackUtil.create(session);
         List<ArtifactItem> processedItems = getProcessedArtifactItems(false);
         for (ArtifactItem artifactItem : processedItems) {
             if (artifactItem.isNeedsProcessing()) {
-                unpackArtifact(artifactItem);
+                unpackArtifact(artifactItem, unpackUtil);
             } else {
-                this.getLog().info(artifactItem.getArtifact().getFile().getName() + " already unpacked.");
+                this.getLog().info(artifactItem.getArtifact().getPath().getFileName() + " already unpacked.");
             }
         }
     }
@@ -184,14 +161,14 @@ public class UnpackMojo extends AbstractFromConfigurationMojo {
      * This method gets the Artifact object and calls DependencyUtil.unpackFile.
      *
      * @param artifactItem containing the information about the Artifact to unpack
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      * @see #getArtifact
      */
-    private void unpackArtifact(ArtifactItem artifactItem) throws MojoExecutionException {
+    private void unpackArtifact(ArtifactItem artifactItem, UnpackUtil unpackUtil) throws MojoException {
         MarkerHandler handler = new UnpackFileMarkerHandler(artifactItem, this.markersDirectory);
 
         unpackUtil.unpack(
-                artifactItem.getArtifact().getFile(),
+                artifactItem.getArtifact().getPath().toFile(),
                 artifactItem.getType(),
                 artifactItem.getOutputDirectory(),
                 artifactItem.getIncludes(),
@@ -216,9 +193,9 @@ public class UnpackMojo extends AbstractFromConfigurationMojo {
     /**
      * @param removeVersion removeVersion
      * @return list of {@link ArtifactItem}
-     * @throws MojoExecutionException in case of an error
+     * @throws MojoException in case of an error
      */
-    protected List<ArtifactItem> getProcessedArtifactItems(boolean removeVersion) throws MojoExecutionException {
+    protected List<ArtifactItem> getProcessedArtifactItems(boolean removeVersion) throws MojoException {
         return super.getProcessedArtifactItems(new ProcessArtifactItemsRequest(removeVersion, false, false, false));
     }
 

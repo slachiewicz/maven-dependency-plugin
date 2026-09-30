@@ -18,34 +18,37 @@
  */
 package org.apache.maven.plugins.dependency;
 
-import javax.inject.Inject;
-
 import java.util.List;
 
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.RemoteRepository;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.annotations.Nullable;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.utils.ParamArtifact;
 import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.repository.RemoteRepository;
-import org.eclipse.aether.repository.RepositoryPolicy;
-import org.eclipse.aether.resolution.ArtifactDescriptorException;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
-import org.eclipse.aether.resolution.DependencyResolutionException;
 
 /**
  * Resolves a single artifact, eventually transitively, from the specified remote repositories. Caveat: will always
  * check the central repository defined in the super pom. You could use a mirror entry in your <code>settings.xml</code>
  */
-@Mojo(name = "get", requiresProject = false, threadSafe = true)
-public class GetMojo extends AbstractMojo {
+@Mojo(name = "get", projectRequired = false)
+public class GetMojo implements org.apache.maven.api.plugin.Mojo {
 
-    private final ResolverUtil resolverUtil;
+    @Inject
+    private Session session;
 
-    private final ParamArtifact paramArtifact = new ParamArtifact();
+    @Inject
+    private Log log;
+
+    @Inject
+    @Nullable
+    private Project project;
 
     /**
      * Repositories in the format {@code id::[layout::]url} or just URLs, separated by comma. That is,
@@ -80,43 +83,47 @@ public class GetMojo extends AbstractMojo {
     @Parameter(property = "mdep.skip", defaultValue = "false")
     private boolean skip;
 
-    @Inject
-    public GetMojo(ResolverUtil resolverUtil) {
-        this.resolverUtil = resolverUtil;
-    }
-
     @Override
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    public void execute() throws MojoException {
         if (isSkip()) {
-            getLog().info("Skipping plugin execution");
+            log.info("Skipping plugin execution");
             return;
         }
 
+        ParamArtifact paramArtifact = new ParamArtifact();
+        paramArtifact.setGroupId(groupId);
+        paramArtifact.setArtifactId(artifactId);
+        paramArtifact.setVersion(version);
+        paramArtifact.setClassifier(classifier);
+        paramArtifact.setPackaging(packaging);
+        paramArtifact.setArtifact(artifact);
+
         if (!paramArtifact.isDataSet()) {
-            throw new MojoFailureException("You must specify an artifact OR GAV separately, "
+            throw new MojoException("You must specify an artifact OR GAV separately, "
                     + "e.g. -Dartifact=org.apache.maven.plugins:maven-downloader-plugin:1.0 OR "
                     + "-DgroupId=org.apache.maven.plugins -DartifactId=maven-downloader-plugin -Dversion=1.0");
         }
 
-        Artifact artifact;
+        Artifact resolved;
         List<RemoteRepository> repositories;
+        ResolverUtil resolverUtil = new ResolverUtil(session, project);
         try {
-            artifact = resolverUtil.createArtifactFromParams(paramArtifact);
-            repositories = resolverUtil.remoteRepositories(remoteRepositories, RepositoryPolicy.UPDATE_POLICY_ALWAYS);
+            resolved = resolverUtil.createArtifactFromParams(paramArtifact);
+            repositories = resolverUtil.remoteRepositories(remoteRepositories, "always");
         } catch (IllegalArgumentException e) {
-            throw new MojoFailureException(e.getMessage(), e);
+            throw new MojoException(e.getMessage(), e);
         }
 
         try {
             if (transitive) {
-                getLog().info("Resolving " + artifact + " with transitive dependencies");
-                resolverUtil.resolveDependencies(artifact, repositories);
+                log.info("Resolving " + resolved + " with transitive dependencies");
+                resolverUtil.resolveDependencies(resolved, repositories);
             } else {
-                getLog().info("Resolving " + artifact);
-                resolverUtil.resolveArtifact(artifact, repositories);
+                log.info("Resolving " + resolved);
+                resolverUtil.resolveArtifact(resolved, repositories);
             }
-        } catch (ArtifactResolutionException | ArtifactDescriptorException | DependencyResolutionException e) {
-            throw new MojoExecutionException("Couldn't download artifact: " + e.getMessage(), e);
+        } catch (RuntimeException e) {
+            throw new MojoException("Couldn't download artifact: " + e.getMessage(), e);
         }
     }
 
@@ -129,53 +136,69 @@ public class GetMojo extends AbstractMojo {
 
     /**
      * The groupId of the artifact to resolve. Ignored if {@code artifact} is used.
-     *
-     * @param groupId the groupId
      */
     @Parameter(property = "groupId")
+    private String groupId;
+
+    /**
+     * @param groupId the value to set
+     */
     public void setGroupId(String groupId) {
-        paramArtifact.setGroupId(groupId);
+        this.groupId = groupId;
     }
 
     /**
      * The artifactId of the artifact to resolve. Ignored if {@code artifact} is used.
-     *
-     * @param artifactId the artifactId
      */
     @Parameter(property = "artifactId")
+    private String artifactId;
+
+    /**
+     * @param artifactId the value to set
+     */
     public void setArtifactId(String artifactId) {
-        paramArtifact.setArtifactId(artifactId);
+        this.artifactId = artifactId;
     }
 
     /**
      * The version of the artifact to resolve. Ignored if {@code artifact} is used.
-     *
-     * @param version the version
      */
     @Parameter(property = "version")
+    private String version;
+
+    /**
+     * @param version the value to set
+     */
     public void setVersion(String version) {
-        paramArtifact.setVersion(version);
+        this.version = version;
     }
 
     /**
      * The classifier of the artifact to resolve. Ignored if {@code artifact} is used.
      *
-     * @param classifier the classifier to be used
      * @since 2.3
      */
     @Parameter(property = "classifier")
+    private String classifier;
+
+    /**
+     * @param classifier the value to set
+     */
     public void setClassifier(String classifier) {
-        paramArtifact.setClassifier(classifier);
+        this.classifier = classifier;
     }
 
     /**
      * The packaging of the artifact to resolve. Ignored if {@code artifact} is used.
-     *
-     * @param type packaging
      */
     @Parameter(property = "packaging", defaultValue = "jar")
-    public void setPackaging(String type) {
-        paramArtifact.setPackaging(type);
+    private String packaging;
+
+    /**
+     * @param packaging the value to set
+     */
+    public void setPackaging(String packaging) {
+        this.packaging = packaging;
     }
 
     /**
@@ -191,7 +214,12 @@ public class GetMojo extends AbstractMojo {
      * @param artifact the artifact coordinates
      */
     @Parameter(property = "artifact")
+    private String artifact;
+
+    /**
+     * @param artifact the value to set
+     */
     public void setArtifact(String artifact) {
-        paramArtifact.setArtifact(artifact);
+        this.artifact = artifact;
     }
 }

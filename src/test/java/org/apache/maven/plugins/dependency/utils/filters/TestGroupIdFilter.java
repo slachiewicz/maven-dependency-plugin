@@ -24,33 +24,29 @@ import java.util.LinkedHashSet;
 import java.util.Set;
 import java.util.TreeSet;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.testing.stubs.ArtifactStub;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 class TestGroupIdFilter {
 
-    private static Artifact groupId(final String groupId) {
-        final ArtifactStub artifact = new ArtifactStub();
-        artifact.setGroupId(groupId);
-        artifact.setArtifactId("artifact-" + groupId);
-        artifact.setVersion("1.0");
-        return artifact;
+    private static Dependency groupId(final String groupId) {
+        return DependencyStubs.dependency(groupId, "artifact-" + groupId, "1.0", "compile", "jar", null);
     }
 
-    private static Set<Artifact> artifacts(final String... groupIds) {
-        final Set<Artifact> result = new LinkedHashSet<>();
+    private static Set<Dependency> artifacts(final String... groupIds) {
+        final Set<Dependency> result = new LinkedHashSet<>();
         for (final String groupId : groupIds) {
             result.add(groupId(groupId));
         }
         return result;
     }
 
-    private static Set<String> groupIdsOf(final Set<Artifact> artifacts) {
+    private static Set<String> groupIdsOf(final Set<Dependency> artifacts) {
         final Set<String> result = new TreeSet<>();
-        for (final Artifact artifact : artifacts) {
+        for (final Dependency artifact : artifacts) {
             result.add(artifact.getGroupId());
         }
         return result;
@@ -60,7 +56,7 @@ class TestGroupIdFilter {
     void includeDoesNotMatchUnrelatedGroupIdSharingStringPrefix() {
         final GroupIdFilter filter = new GroupIdFilter("org.example", "");
 
-        final Set<Artifact> result = filter.filter(artifacts("org.example", "org.example.foo", "org.example2"));
+        final Set<Dependency> result = filter.filter(artifacts("org.example", "org.example.foo", "org.example2"));
 
         assertEquals(new TreeSet<>(Arrays.asList("org.example", "org.example.foo")), groupIdsOf(result));
     }
@@ -69,7 +65,7 @@ class TestGroupIdFilter {
     void excludeDoesNotMatchUnrelatedGroupIdSharingStringPrefix() {
         final GroupIdFilter filter = new GroupIdFilter("", "org.example");
 
-        final Set<Artifact> result = filter.filter(artifacts("org.example", "org.example.foo", "org.example2"));
+        final Set<Dependency> result = filter.filter(artifacts("org.example", "org.example.foo", "org.example2"));
 
         assertEquals(new TreeSet<>(Collections.singleton("org.example2")), groupIdsOf(result));
     }
@@ -78,7 +74,7 @@ class TestGroupIdFilter {
     void exactMatchOnlyMatchesTheListedGroupId() {
         final GroupIdFilter filter = new GroupIdFilter("org.example", "", true);
 
-        final Set<Artifact> result = filter.filter(artifacts("org.example", "org.example.foo", "org.example2"));
+        final Set<Dependency> result = filter.filter(artifacts("org.example", "org.example.foo", "org.example2"));
 
         assertEquals(new TreeSet<>(Collections.singleton("org.example")), groupIdsOf(result));
     }

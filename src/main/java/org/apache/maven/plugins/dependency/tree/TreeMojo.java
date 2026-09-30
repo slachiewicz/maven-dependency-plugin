@@ -18,44 +18,37 @@
  */
 package org.apache.maven.plugins.dependency.tree;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
 import java.io.StringWriter;
 import java.io.Writer;
 import java.nio.charset.Charset;
 import java.nio.file.Files;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.IdentityHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Objects;
 import java.util.function.Predicate;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
-import org.apache.maven.artifact.resolver.filter.ScopeArtifactFilter;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DependencyScope;
+import org.apache.maven.api.DownloadedArtifact;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.RemoteRepository;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.DependencyResolverException;
+import org.apache.maven.api.services.ProjectManager;
 import org.apache.maven.plugins.dependency.tree.SerializingDependencyNodeVisitor.GraphTokens;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
-import org.apache.maven.project.DependencyResolutionException;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectDependenciesResolver;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
+import org.apache.maven.shared.artifact.filter.ScopeArtifactFilter;
 import org.apache.maven.shared.artifact.filter.StrictPatternExcludesArtifactFilter;
 import org.apache.maven.shared.artifact.filter.StrictPatternIncludesArtifactFilter;
-import org.eclipse.aether.RepositorySystem;
-import org.eclipse.aether.collection.DependencyCollectionException;
-import org.eclipse.aether.repository.RemoteRepository;
-import org.eclipse.aether.resolution.ArtifactRequest;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
-import org.eclipse.aether.resolution.ArtifactResult;
 
 /**
  * Displays the dependency tree for this project. Multiple formats are supported: text (by default), but also
@@ -68,20 +61,23 @@ import org.eclipse.aether.resolution.ArtifactResult;
  * @author <a href="mailto:markhobson@gmail.com">Mark Hobson</a>
  * @since 2.0-alpha-5
  */
-@Mojo(name = "tree", requiresDependencyCollection = ResolutionScope.TEST, threadSafe = true)
-public class TreeMojo extends AbstractMojo {
+@Mojo(name = "tree")
+public class TreeMojo implements org.apache.maven.api.plugin.Mojo {
     // fields -----------------------------------------------------------------
 
     /**
      * The Maven project.
      */
-    private final MavenProject project;
+    @Inject
+    private Project project;
 
-    private final MavenSession session;
+    @Inject
+    private Session session;
 
-    private final DependencyTreeBuilder dependencyTreeBuilder;
+    @Inject
+    private Log log;
 
-    private final RepositorySystem repositorySystem;
+    private final DependencyTreeBuilder dependencyTreeBuilder = new DependencyTreeBuilder();
 
     @Parameter(property = "outputEncoding", defaultValue = "${project.reporting.outputEncoding}")
     private String outputEncoding;
@@ -230,55 +226,37 @@ public class TreeMojo extends AbstractMojo {
     @Parameter(property = "skip", defaultValue = "false")
     private boolean skip;
 
-    @Inject
-    public TreeMojo(
-            MavenProject project,
-            MavenSession session,
-            RepositorySystem repositorySystem,
-            ProjectDependenciesResolver projectDependenciesResolver) {
-        this.project = project;
-        this.session = session;
-        this.repositorySystem = repositorySystem;
-        this.dependencyTreeBuilder = new DependencyTreeBuilder(repositorySystem, projectDependenciesResolver);
-    }
-
     // Mojo methods -----------------------------------------------------------
 
     /*
      * @see org.apache.maven.plugin.Mojo#execute()
      */
     @Override
-    public void execute() throws MojoExecutionException {
+    public void execute() throws MojoException {
         if (isSkip()) {
-            getLog().info("Skipping plugin execution");
+            log.info("Skipping plugin execution");
             return;
         }
 
         try {
-            ArtifactFilter artifactFilter = createResolvingArtifactFilter();
+            Predicate<Dependency> artifactFilter = createResolvingArtifactFilter();
 
-            if (verbose) {
-                rootNode = dependencyTreeBuilder.buildVerbose(project, session.getRepositorySession(), artifactFilter);
-            } else {
-                // non-verbose mode shows what Maven resolves, consistent with the Maven version running
-                rootNode = dependencyTreeBuilder.build(project, session.getRepositorySession(), artifactFilter);
-            }
+            // the plain tree is what Maven resolves, consistent with the Maven version running; verbose keeps omitted
+            // nodes
+            rootNode = dependencyTreeBuilder.build(session, project, artifactFilter, verbose);
 
+            boolean joinDotGraphs = outputFile != null && appendOutput && "dot".equals(outputType);
             DependencyNode completeRoot = null;
             if (showSizes) {
                 if (isSizesOutputType()) {
                     // the totals of the plain tree count what a node brings in, also where Maven kept it elsewhere
-                    completeRoot = verbose
-                            ? rootNode
-                            : dependencyTreeBuilder.buildVerbose(
-                                    project, session.getRepositorySession(), artifactFilter);
+                    completeRoot =
+                            verbose ? rootNode : dependencyTreeBuilder.build(session, project, artifactFilter, true);
                 } else {
-                    getLog().warn("showSizes is ignored for outputType " + outputType
-                            + ", it applies to text and json");
+                    log.warn("showSizes is ignored for outputType " + outputType + ", it applies to text and json");
                 }
             }
 
-            boolean joinDotGraphs = outputFile != null && appendOutput && "dot".equals(outputType);
             String dependencyTreeString = serializeDependencyTree(rootNode, completeRoot, !joinDotGraphs);
 
             if (outputFile != null) {
@@ -289,14 +267,14 @@ public class TreeMojo extends AbstractMojo {
                     DependencyUtil.write(dependencyTreeString, outputFile, this.appendOutput, encoding);
                 }
 
-                getLog().info("Wrote dependency tree to: " + outputFile);
+                log.info("Wrote dependency tree to: " + outputFile);
             } else {
-                DependencyUtil.log(dependencyTreeString, getLog());
+                DependencyUtil.log(dependencyTreeString, log);
             }
-        } catch (DependencyResolutionException | DependencyCollectionException exception) {
-            throw new MojoExecutionException("Cannot build project dependency graph", exception);
+        } catch (DependencyResolverException exception) {
+            throw new MojoException("Cannot build project dependency graph", exception);
         } catch (IOException exception) {
-            throw new MojoExecutionException("Cannot serialize project dependency graph", exception);
+            throw new MojoException("Cannot serialize project dependency graph", exception);
         }
     }
 
@@ -307,7 +285,7 @@ public class TreeMojo extends AbstractMojo {
      *
      * @return the Maven project
      */
-    public MavenProject getProject() {
+    public Project getProject() {
         return project;
     }
 
@@ -341,12 +319,12 @@ public class TreeMojo extends AbstractMojo {
      *
      * @return the artifact filter
      */
-    private ArtifactFilter createResolvingArtifactFilter() {
-        ArtifactFilter filter;
+    private Predicate<Dependency> createResolvingArtifactFilter() {
+        Predicate<Dependency> filter;
 
         // filter scope
         if (scope != null) {
-            getLog().debug("+ Resolving dependency tree for scope '" + scope + "'");
+            log.debug("+ Resolving dependency tree for scope '" + scope + "'");
 
             filter = new ScopeArtifactFilter(scope);
         } else {
@@ -383,58 +361,37 @@ public class TreeMojo extends AbstractMojo {
     }
 
     /**
-     * Resolves the artifacts of the tree, in one request, and sets their sizes and totals on the displayed nodes. An
-     * artifact that cannot be resolved, or whose file is not a regular file such as the classes directory of a module
-     * of the reactor, has an unknown size. A dependency of scope <code>system</code> is measured at its
-     * <code>systemPath</code>.
+     * Computes the sizes of the artifacts of the displayed tree and of the complete tree, which means resolving the
+     * artifacts that are not resolved yet.
      */
     private void annotateSizes(DependencyNode displayed, DependencyNode complete) {
         Map<String, DependencyNode> nodes = DependencySizes.nodes(displayed, complete);
         Map<String, Long> sizes = new HashMap<>();
-        List<ArtifactRequest> requests = new ArrayList<>();
-        Map<org.eclipse.aether.artifact.Artifact, String> keys = new IdentityHashMap<>();
         for (Map.Entry<String, DependencyNode> entry : nodes.entrySet()) {
             DependencyNode node = entry.getValue();
             File file = DependencySizes.localFile(node);
-            if (file != null) {
-                if (file.isFile()) {
-                    sizes.put(entry.getKey(), file.length());
-                } else {
-                    getLog().debug("No size for " + node.getArtifact() + ", not a file: " + file);
+            if (file == null) {
+                try {
+                    List<RemoteRepository> repositories = node.getRepositories().isEmpty()
+                            ? session.getService(ProjectManager.class).getRemoteProjectRepositories(project)
+                            : node.getRepositories();
+                    DownloadedArtifact resolved =
+                            session.resolveArtifact(node.getArtifact().toCoordinates(), repositories);
+                    file = resolved.getPath().toFile();
+                } catch (RuntimeException e) {
+                    log.debug("No size for " + node.getArtifact() + ": " + e.getMessage());
                 }
-            } else {
-                org.eclipse.aether.artifact.Artifact artifact = node.getResolverArtifact() != null
-                        ? node.getResolverArtifact()
-                        : RepositoryUtils.toArtifact(node.getArtifact());
-                List<RemoteRepository> repositories = node.getRepositories().isEmpty()
-                        ? project.getRemoteProjectRepositories()
-                        : node.getRepositories();
-                requests.add(new ArtifactRequest(artifact, repositories, null));
-                keys.put(artifact, entry.getKey());
             }
-        }
-
-        if (!requests.isEmpty()) {
-            List<ArtifactResult> results;
-            try {
-                results = repositorySystem.resolveArtifacts(session.getRepositorySession(), requests);
-            } catch (ArtifactResolutionException e) {
-                results = e.getResults();
-            }
-            for (ArtifactResult result : results) {
-                String key = keys.get(result.getRequest().getArtifact());
-                File file = result.isResolved() ? result.getArtifact().getFile() : null;
-                if (key != null && file != null && file.isFile()) {
-                    sizes.put(key, file.length());
-                } else {
-                    getLog().debug("No size for " + result.getRequest().getArtifact() + ": " + result.getExceptions());
-                }
+            if (file != null && file.isFile()) {
+                sizes.put(entry.getKey(), file.length());
+            } else if (file != null) {
+                log.debug("No size for " + node.getArtifact() + ", not a file: " + file);
             }
         }
 
         int unknown = nodes.size() - sizes.size();
         if (unknown > 0) {
-            getLog().warn("The size of " + unknown + (unknown > 1 ? " artifacts is" : " artifact is")
+            log.warn("The size of " + unknown + (unknown > 1 ? " artifacts is" : " artifact is")
                     + " unknown, counted as zero in the totals");
         }
 
@@ -491,7 +448,7 @@ public class TreeMojo extends AbstractMojo {
         } else if ("dot".equals(outputType)) {
             return new DOTDependencyNodeVisitor(writer);
         } else if ("json".equals(outputType)) {
-            return new JsonDependencyNodeVisitor(writer);
+            return new JsonDependencyNodeVisitor(writer, project.getPackaging().id());
         } else if ("mermaid".equals(outputType)) {
             return new MermaidDependencyNodeVisitor(writer);
         } else {
@@ -509,11 +466,11 @@ public class TreeMojo extends AbstractMojo {
         GraphTokens graphTokens;
 
         if ("whitespace".equals(theTokens)) {
-            getLog().debug("+ Using whitespace tree tokens");
+            log.debug("+ Using whitespace tree tokens");
 
             graphTokens = SerializingDependencyNodeVisitor.WHITESPACE_TOKENS;
         } else if ("extended".equals(theTokens)) {
-            getLog().debug("+ Using extended tree tokens");
+            log.debug("+ Using extended tree tokens");
 
             graphTokens = SerializingDependencyNodeVisitor.EXTENDED_TOKENS;
         } else {
@@ -530,10 +487,9 @@ public class TreeMojo extends AbstractMojo {
      */
     private Predicate<DependencyNode> createIncludesDependencyNodeFilter() {
         if (includes != null && !includes.isEmpty()) {
-            getLog().debug("+ Filtering dependency tree by artifact include patterns: " + includes);
+            log.debug("+ Filtering dependency tree by artifact include patterns: " + includes);
 
-            ArtifactFilter artifactFilter = new StrictPatternIncludesArtifactFilter(includes);
-            return node -> artifactFilter.include(node.getArtifact());
+            return rootAware(new StrictPatternIncludesArtifactFilter(includes));
         }
 
         return null;
@@ -541,12 +497,27 @@ public class TreeMojo extends AbstractMojo {
 
     private Predicate<DependencyNode> createExcludesDependencyNodeFilter() {
         if (excludes != null && !excludes.isEmpty()) {
-            getLog().debug("+ Filtering dependency tree by artifact exclude patterns: " + excludes);
+            log.debug("+ Filtering dependency tree by artifact exclude patterns: " + excludes);
 
-            ArtifactFilter artifactFilter = new StrictPatternExcludesArtifactFilter(excludes);
-            return node -> artifactFilter.include(node.getArtifact());
+            return rootAware(new StrictPatternExcludesArtifactFilter(excludes));
         }
 
         return null;
+    }
+
+    /**
+     * The root node has no dependency in the Maven 4 API, but Maven 3 had the project artifact there, which the include
+     * and exclude patterns are matched against too: a pattern that does not match the project leaves an empty tree.
+     * The project is the root, of the project's packaging type.
+     */
+    private Predicate<DependencyNode> rootAware(Predicate<Dependency> filter) {
+        return node -> {
+            Dependency dependency = node.getDependency();
+            if (dependency == null) {
+                dependency = ResolvedDependency.of(
+                        session, node.getArtifact(), project.getPackaging().id(), DependencyScope.COMPILE, null);
+            }
+            return filter.test(dependency);
+        };
     }
 }

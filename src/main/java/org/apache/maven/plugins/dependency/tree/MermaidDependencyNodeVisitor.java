@@ -57,7 +57,10 @@ public class MermaidDependencyNodeVisitor extends AbstractSerializingVisitor imp
             String id = id(node);
             for (DependencyNode child : node.getChildren()) {
                 String childId = id(child);
-                String scope = child.getArtifact().getScope();
+                String scope =
+                        child.getDependency() != null && child.getDependency().getScope() != null
+                                ? child.getDependency().getScope().id()
+                                : null;
                 writer.write("\t" + id
                         + (scope == null || scope.isEmpty() ? " --> " : " -->|" + scope + "| ")
                         + childId + System.lineSeparator());

@@ -25,128 +25,81 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.DependencyManagement;
-import org.apache.maven.model.Exclusion;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DependencyCoordinates;
+import org.apache.maven.api.Exclusion;
 import org.apache.maven.plugins.dependency.testUtils.DependencyArtifactStubFactory;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotEquals;
 import static org.junit.jupiter.api.Assertions.assertSame;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
-import static org.junit.jupiter.api.Assertions.fail;
 
+/**
+ * Tests the helper methods of <code>analyze-dep-mgt</code>. The goal itself is covered by the
+ * <code>analyze-dep-mgt</code> and <code>mdep-506-dependency-without-version-in-depmgt</code> integration tests.
+ */
 class TestAnalyzeDepMgt {
 
     AnalyzeDepMgt mojo;
 
     DependencyArtifactStubFactory stubFactory;
 
-    Dependency exclusion;
+    DependencyCoordinates exclusion;
 
     Exclusion ex;
 
-    DependencyManagement depMgt;
+    Set<Dependency> allArtifacts;
 
     @BeforeEach
     void setUp() throws Exception {
-
-        MavenProject project = new MavenProject();
-        mojo = new AnalyzeDepMgt(project);
+        mojo = new AnalyzeDepMgt();
 
         stubFactory = new DependencyArtifactStubFactory(new File(""), false);
 
-        Set<Artifact> allArtifacts = stubFactory.getMixedArtifacts();
-        Set<Artifact> directArtifacts = stubFactory.getClassifiedArtifacts();
+        allArtifacts = stubFactory.getMixedArtifacts();
 
-        Artifact exclusionArtifact = stubFactory.getReleaseArtifact();
-        directArtifacts.add(exclusionArtifact);
-        ex = new Exclusion();
-        ex.setArtifactId(exclusionArtifact.getArtifactId());
-        ex.setGroupId(exclusionArtifact.getGroupId());
+        Dependency exclusionArtifact = stubFactory.getReleaseArtifact();
+        allArtifacts.add(exclusionArtifact);
+        ex = DependencyStubs.exclusion(exclusionArtifact.getGroupId(), exclusionArtifact.getArtifactId());
 
-        exclusion = new Dependency();
-        exclusion.setArtifactId(exclusionArtifact.getArtifactId());
-        exclusion.setGroupId(exclusionArtifact.getGroupId());
-        exclusion.setType(exclusionArtifact.getType());
-        exclusion.setClassifier("");
-        exclusion.setVersion("3.0");
+        List<Exclusion> exclusions = new ArrayList<>();
+        exclusions.add(ex);
+        exclusion = DependencyStubs.coordinates(
+                exclusionArtifact.getGroupId(),
+                exclusionArtifact.getArtifactId(),
+                exclusionArtifact.getType().id(),
+                "",
+                "3.0",
+                exclusions);
+    }
 
-        exclusion.addExclusion(ex);
-        List<Dependency> list = new ArrayList<>();
-        list.add(exclusion);
-
-        depMgt = new DependencyManagement();
-        depMgt.setDependencies(list);
-
-        project.setArtifacts(allArtifacts);
-        project.setDependencyArtifacts(directArtifacts);
+    private static String managementKey(String groupId, String artifactId, String type, String classifier) {
+        return groupId + ":" + artifactId + ":" + type
+                + ((classifier != null && !classifier.isEmpty()) ? ":" + classifier : "");
     }
 
     @Test
     void getManagementKey() throws Exception {
-        Dependency dep = new Dependency();
-        dep.setArtifactId("artifact");
-        dep.setClassifier("class");
-        dep.setGroupId("group");
-        dep.setType("type");
-
-        // version isn't used in the key, it can be different
-        dep.setVersion("1.1");
-
-        Artifact artifact =
-                stubFactory.createArtifact("group", "artifact", "1.0", Artifact.SCOPE_COMPILE, "type", "class");
+        Dependency artifact = stubFactory.createArtifact("group", "artifact", "1.0", "compile", "type", "class");
 
         // basic case ok
-        assertEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
+        assertEquals(managementKey("group", "artifact", "type", "class"), mojo.getArtifactManagementKey(artifact));
 
-        // now change each one and make sure it fails, then set it back and make
-        // sure it's ok before
-        // testing the next one
-        dep.setType("t");
-        dep.clearManagementKey();
-        assertNotEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
+        // now change each one and make sure it fails
+        assertNotEquals(managementKey("group", "artifact", "t", "class"), mojo.getArtifactManagementKey(artifact));
+        assertNotEquals(managementKey("group", "a", "type", "class"), mojo.getArtifactManagementKey(artifact));
+        assertNotEquals(managementKey("group", "artifact", "type", "c"), mojo.getArtifactManagementKey(artifact));
+        assertNotEquals(managementKey("g", "artifact", "type", "class"), mojo.getArtifactManagementKey(artifact));
 
-        dep.setType("type");
-        dep.clearManagementKey();
-        assertEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
+        artifact = stubFactory.createArtifact("group", "artifact", "1.0", "compile", "type", null);
+        assertEquals(managementKey("group", "artifact", "type", null), mojo.getArtifactManagementKey(artifact));
 
-        dep.setArtifactId("a");
-        dep.clearManagementKey();
-        assertNotEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
-
-        dep.setArtifactId("artifact");
-        dep.clearManagementKey();
-        assertEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
-
-        dep.setClassifier("c");
-        dep.clearManagementKey();
-        assertNotEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
-
-        dep.setClassifier("class");
-        dep.clearManagementKey();
-        assertEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
-
-        dep.setGroupId("g");
-        dep.clearManagementKey();
-        assertNotEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
-
-        dep.setGroupId("group");
-        dep.setClassifier(null);
-        dep.clearManagementKey();
-        artifact = stubFactory.createArtifact("group", "artifact", "1.0", Artifact.SCOPE_COMPILE, "type", null);
-        assertEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
-
-        dep.setClassifier("");
-        dep.clearManagementKey();
-        artifact = stubFactory.createArtifact("group", "artifact", "1.0", Artifact.SCOPE_COMPILE, "type", "");
-        assertEquals(dep.getManagementKey(), mojo.getArtifactManagementKey(artifact));
+        artifact = stubFactory.createArtifact("group", "artifact", "1.0", "compile", "type", "");
+        assertEquals(managementKey("group", "artifact", "type", ""), mojo.getArtifactManagementKey(artifact));
     }
 
     @Test
@@ -171,7 +124,7 @@ class TestAnalyzeDepMgt {
         // already tested this method so I can trust it.
         Map<String, Exclusion> map = mojo.addExclusions(list);
 
-        List<Artifact> l = mojo.getExclusionErrors(map, mojo.getProject().getArtifacts());
+        List<Dependency> l = mojo.getExclusionErrors(map, allArtifacts);
 
         assertEquals(1, l.size());
 
@@ -180,59 +133,21 @@ class TestAnalyzeDepMgt {
 
     @Test
     void getMismatch() throws Exception {
-        Map<String, Dependency> depMgtMap = new HashMap<>();
+        Map<String, DependencyCoordinates> depMgtMap = new HashMap<>();
 
-        depMgtMap.put(exclusion.getManagementKey(), exclusion);
+        depMgtMap.put(
+                managementKey(
+                        exclusion.getGroupId(),
+                        exclusion.getArtifactId(),
+                        exclusion.getType().id(),
+                        ""),
+                exclusion);
 
-        Map<Artifact, Dependency> results =
-                mojo.getMismatch(depMgtMap, mojo.getProject().getArtifacts());
+        Map<Dependency, DependencyCoordinates> results = mojo.getMismatch(depMgtMap, allArtifacts);
 
         assertEquals(1, results.size());
         // the release artifact is used to create the exclusion
         assertTrue(results.containsKey(stubFactory.getReleaseArtifact()));
         assertSame(exclusion, results.get(stubFactory.getReleaseArtifact()));
-    }
-
-    @Test
-    void mojo() throws Exception {
-        mojo.setIgnoreDirect(false);
-        // test with nothing in depMgt
-        mojo.execute();
-
-        MavenProject project = mojo.getProject();
-        project.getModel().setDependencyManagement(depMgt);
-        // test with exclusion
-        mojo.execute();
-
-        try {
-            // test with exclusion
-            mojo.setFailBuild(true);
-            mojo.execute();
-            fail("Expected exception to fail the build.");
-        } catch (MojoExecutionException e) {
-        }
-
-        mojo.setFailBuild(true);
-        mojo.setIgnoreDirect(true);
-        mojo.execute();
-    }
-
-    @Test
-    void ignoredDependenciesAreSkipped() throws Exception {
-        mojo.setIgnoreDirect(false);
-        mojo.setFailBuild(true);
-        mojo.getProject().getModel().setDependencyManagement(depMgt);
-        String ga = exclusion.getGroupId() + ":" + exclusion.getArtifactId();
-        stubFactory.getReleaseArtifact().setScope(Artifact.SCOPE_COMPILE);
-
-        mojo.setIgnoredDependencies(new String[] {ga});
-        mojo.execute();
-
-        // a scope segment that does not match leaves the artifact checked
-        mojo.setIgnoredDependencies(new String[] {ga + "::*:provided"});
-        assertThrows(MojoExecutionException.class, mojo::execute);
-
-        mojo.setIgnoredDependencies(new String[] {ga + "::*:compile"});
-        mojo.execute();
     }
 }

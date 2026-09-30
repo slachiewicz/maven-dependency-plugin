@@ -20,12 +20,25 @@ package org.apache.maven.plugins.dependency.fromConfiguration;
 
 import java.util.Locale;
 
-import org.eclipse.aether.util.artifact.JavaScopes;
+import org.apache.maven.api.PathScope;
 
 enum ClasspathScope {
-    COMPILE,
-    RUNTIME,
-    TEST;
+    COMPILE(PathScope.MAIN_COMPILE),
+    RUNTIME(PathScope.MAIN_RUNTIME),
+    TEST(PathScope.TEST_RUNTIME);
+
+    private final PathScope pathScope;
+
+    ClasspathScope(PathScope pathScope) {
+        this.pathScope = pathScope;
+    }
+
+    /**
+     * The Maven 4 path scope whose dependency scopes are collected for this classpath scope.
+     */
+    PathScope pathScope() {
+        return pathScope;
+    }
 
     static ClasspathScope fromString(String value) {
         try {
@@ -33,22 +46,6 @@ enum ClasspathScope {
         } catch (IllegalArgumentException e) {
             throw new IllegalArgumentException(
                     "Unknown dependency scope '" + value + "'. Expected one of: compile, runtime, test.");
-        }
-    }
-
-    boolean includes(String scope) {
-        String effectiveScope = scope == null || scope.isEmpty() ? JavaScopes.COMPILE : scope;
-        switch (this) {
-            case COMPILE:
-                return JavaScopes.COMPILE.equals(effectiveScope)
-                        || JavaScopes.PROVIDED.equals(effectiveScope)
-                        || JavaScopes.SYSTEM.equals(effectiveScope);
-            case RUNTIME:
-                return JavaScopes.COMPILE.equals(effectiveScope) || JavaScopes.RUNTIME.equals(effectiveScope);
-            case TEST:
-                return true;
-            default:
-                throw new IllegalStateException("Unhandled classpath scope " + this);
         }
     }
 

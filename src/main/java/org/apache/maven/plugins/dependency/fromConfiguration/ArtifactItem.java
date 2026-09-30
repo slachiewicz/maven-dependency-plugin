@@ -21,9 +21,8 @@ package org.apache.maven.plugins.dependency.fromConfiguration;
 import java.io.File;
 import java.util.Objects;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.ArtifactUtils;
-import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.codehaus.plexus.components.io.filemappers.FileMapper;
 
@@ -116,7 +115,7 @@ public class ArtifactItem {
     /**
      * Artifact Item.
      */
-    private Artifact artifact;
+    private DownloadedDependency artifact;
 
     /**
      * A comma separated list of file patterns to include when unpacking the artifact.
@@ -144,15 +143,15 @@ public class ArtifactItem {
     }
 
     /**
-     * @param artifact {@link Artifact}
+     * @param artifact {@link DownloadedDependency}
      */
-    public ArtifactItem(Artifact artifact) {
+    public ArtifactItem(DownloadedDependency artifact) {
         this.setArtifact(artifact);
         this.setArtifactId(artifact.getArtifactId());
         this.setClassifier(artifact.getClassifier());
         this.setGroupId(artifact.getGroupId());
-        this.setType(artifact.getType());
-        this.setVersion(artifact.getVersion());
+        this.setType(artifact.getType() != null ? artifact.getType().id() : artifact.getExtension());
+        this.setVersion(artifact.getVersion().toString());
     }
 
     private String filterEmptyString(String in) {
@@ -238,7 +237,7 @@ public class ArtifactItem {
      * @return the base version
      */
     public String getBaseVersion() {
-        return ArtifactUtils.toSnapshotVersion(version);
+        return version == null ? null : version.replaceFirst("-\\d{8}\\.\\d{6}-\\d+$", "-SNAPSHOT");
     }
 
     /**
@@ -339,14 +338,14 @@ public class ArtifactItem {
     /**
      * @return the artifact
      */
-    public Artifact getArtifact() {
+    public DownloadedDependency getArtifact() {
         return this.artifact;
     }
 
     /**
      * @param artifact the artifact to set
      */
-    public void setArtifact(Artifact artifact) {
+    public void setArtifact(DownloadedDependency artifact) {
         this.artifact = artifact;
     }
 

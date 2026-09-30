@@ -18,17 +18,22 @@
  */
 package org.apache.maven.plugins.dependency;
 
-import javax.inject.Inject;
-
+import java.nio.file.Path;
 import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.model.Parent;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.services.xml.ModelXmlFactory;
+import org.apache.maven.api.services.xml.XmlReaderRequest;
+import org.apache.maven.plugins.dependency.utils.ResolverUtil;
 
 /**
  * Displays all ancestor POMs of the project. This may be useful in a continuous integration system where you want to
@@ -37,36 +42,65 @@ import org.apache.maven.project.MavenProject;
  * @author Mirko Friedenhagen
  * @since 2.9
  */
-@Mojo(name = "display-ancestors", threadSafe = true, requiresProject = true, defaultPhase = LifecyclePhase.VALIDATE)
-public class DisplayAncestorsMojo extends AbstractMojo {
-
-    private MavenProject project;
+@Mojo(name = "display-ancestors", defaultPhase = "validate")
+public class DisplayAncestorsMojo implements org.apache.maven.api.plugin.Mojo {
 
     @Inject
-    public DisplayAncestorsMojo(MavenProject project) {
-        this.project = project;
-    }
+    private Project project;
+
+    @Inject
+    private Session session;
+
+    @Inject
+    private Log log;
 
     @Override
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    public void execute() throws MojoException {
         final List<String> ancestors = collectAncestors();
 
         if (ancestors.isEmpty()) {
-            getLog().info("No Ancestor POMs!");
+            log.info("No Ancestor POMs!");
         } else {
-            getLog().info("Ancestor POMs: " + String.join(" <- ", ancestors));
+            log.info("Ancestor POMs: " + String.join(" <- ", ancestors));
         }
     }
 
+    /**
+     * Follows the {@code parent} element instead of {@code Project#getParent()}, which is empty for a parent that is
+     * not in the reactor: the parents are read from the POMs resolved from the repositories.
+     */
     private ArrayList<String> collectAncestors() {
         final ArrayList<String> ancestors = new ArrayList<>();
+        final Set<String> seen = new HashSet<>();
 
-        MavenProject currentAncestor = project.getParent();
-        while (currentAncestor != null) {
-            ancestors.add(currentAncestor.getGroupId() + ":" + currentAncestor.getArtifactId() + ":"
-                    + currentAncestor.getVersion());
+        ResolverUtil resolverUtil = new ResolverUtil(session, project);
+        Parent current = project.getModel().getParent();
+        while (current != null) {
+            final Parent parent = current;
+            String ancestor = parent.getGroupId() + ":" + parent.getArtifactId() + ":" + parent.getVersion();
+            if (!seen.add(ancestor)) {
+                break;
+            }
+            ancestors.add(ancestor);
 
-            currentAncestor = currentAncestor.getParent();
+            Path pom = session.getProjects().stream()
+                    .filter(p -> ancestor.equals(p.getGroupId() + ":" + p.getArtifactId() + ":" + p.getVersion()))
+                    .map(Project::getPomPath)
+                    .findFirst()
+                    .orElseGet(() -> resolverUtil
+                            .resolveArtifact(
+                                    session.createArtifact(
+                                            parent.getGroupId(),
+                                            parent.getArtifactId(),
+                                            parent.getVersion(),
+                                            "",
+                                            "pom",
+                                            "pom"),
+                                    resolverUtil.getProjectRepositories())
+                            .getPath());
+            current = session.getService(ModelXmlFactory.class)
+                    .read(XmlReaderRequest.builder().path(pom).strict(false).build())
+                    .getParent();
         }
 
         return ancestors;

@@ -18,12 +18,12 @@
  */
 package org.apache.maven.plugins.dependency.resolvers;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.HashMap;
+import java.util.HashSet;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
@@ -33,28 +33,19 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.repository.ArtifactRepository;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.Plugin;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedArtifact;
+import org.apache.maven.api.model.Parent;
+import org.apache.maven.api.model.Plugin;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.xml.ModelXmlFactory;
+import org.apache.maven.api.services.xml.XmlReaderRequest;
 import org.apache.maven.plugins.dependency.AbstractDependencyMojo;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.apache.maven.project.DefaultProjectBuildingRequest;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
-import org.apache.maven.project.ProjectBuildingException;
-import org.apache.maven.project.ProjectBuildingRequest;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.resolution.ArtifactDescriptorException;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
-import org.eclipse.aether.resolution.DependencyResolutionException;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Goal that resolves all project plugins and reports and their dependencies.
@@ -62,7 +53,7 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  * @since 2.0
  */
-@Mojo(name = "resolve-plugins", defaultPhase = LifecyclePhase.GENERATE_SOURCES, threadSafe = true)
+@Mojo(name = "resolve-plugins", defaultPhase = "generate-sources")
 public class ResolvePluginsMojo extends AbstractDependencyMojo {
 
     /**
@@ -155,38 +146,11 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
     @Parameter(property = "includeParents", defaultValue = "false")
     boolean includeParents;
 
-    /**
-     * Same value as {@code ModelBuildingRequest.VALIDATION_LEVEL_MINIMAL}: only the parent chain is needed, so
-     * invalid but readable POMs must not fail the build.
-     */
-    private static final int VALIDATION_LEVEL_MINIMAL = 0;
+    /** Parent chains by artifact, so that plugins sharing a dependency read its POMs only once. */
+    private final Map<String, List<DownloadedArtifact>> parentChains = new HashMap<>();
 
-    private final ResolverUtil resolverUtil;
-
-    private final ProjectBuilder projectBuilder;
-
-    /** Parent chains by artifact, so that plugins sharing a dependency build its project only once. */
-    private final Map<String, List<Artifact>> parentChains = new HashMap<>();
-
-    @Inject
-    public ResolvePluginsMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder) {
-        super(session, buildContext, project);
-        this.resolverUtil = resolverUtil;
-        this.projectBuilder = projectBuilder;
-    }
-
-    /**
-     * Main entry into mojo. Gets the list of dependencies and iterates through displaying the resolved version.
-     *
-     * @throws MojoExecutionException with a message if an error occurs
-     */
     @Override
-    protected void doExecute() throws MojoExecutionException {
+    protected void doExecute() throws MojoException {
         try {
             final Set<Plugin> plugins = getProjectPlugins();
 
@@ -199,46 +163,46 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
                 sb.append(System.lineSeparator());
             } else {
                 for (Plugin plugin : plugins) {
-                    Artifact pluginArtifact = resolverUtil.resolvePlugin(plugin);
+                    DownloadedArtifact pluginArtifact = getResolverUtil().resolvePlugin(plugin);
                     String artifactFilename = null;
                     if (outputAbsoluteArtifactFilename) {
                         // we want to print the absolute file name here
-                        artifactFilename = Optional.ofNullable(pluginArtifact.getFile())
-                                .map(File::getAbsoluteFile)
-                                .map(File::getPath)
+                        artifactFilename = Optional.ofNullable(pluginArtifact.getPath())
+                                .map(Path::toAbsolutePath)
+                                .map(Path::toString)
                                 .orElse(null);
                     }
 
-                    String id = pluginArtifact.toString();
+                    String id = ResolverUtil.toString(pluginArtifact);
                     sb.append("   ")
                             .append(id)
                             .append(outputAbsoluteArtifactFilename ? ":" + artifactFilename : "")
                             .append(System.lineSeparator());
 
-                    Set<Artifact> parents = new LinkedHashSet<>();
+                    Set<DownloadedArtifact> parents = new LinkedHashSet<>();
                     if (includeParents) {
-                        addParentArtifacts(pluginArtifact, getProject().getPluginArtifactRepositories(), parents);
+                        parents.addAll(parentChain(pluginArtifact));
                     }
 
                     if (!excludeTransitive) {
-                        List<Artifact> pluginDependencies =
-                                resolverUtil.resolveDependencies(plugin, getDependencyFilter());
+                        Map<Dependency, Path> pluginDependencies =
+                                getResolverUtil().resolveDependencies(plugin, getDependencyFilter());
                         if (includeParents) {
-                            for (Artifact artifact : pluginDependencies) {
-                                addParentArtifacts(artifact, getProject().getRemoteArtifactRepositories(), parents);
+                            for (Dependency dependency : pluginDependencies.keySet()) {
+                                parents.addAll(parentChain(dependency));
                             }
                         }
-                        for (Artifact artifact : pluginDependencies) {
+                        for (Map.Entry<Dependency, Path> artifact : pluginDependencies.entrySet()) {
                             artifactFilename = null;
                             if (outputAbsoluteArtifactFilename) {
                                 // we want to print the absolute file name here
-                                artifactFilename = Optional.ofNullable(artifact.getFile())
-                                        .map(File::getAbsoluteFile)
-                                        .map(File::getPath)
+                                artifactFilename = Optional.ofNullable(artifact.getValue())
+                                        .map(Path::toAbsolutePath)
+                                        .map(Path::toString)
                                         .orElse(null);
                             }
 
-                            id = artifact.toString();
+                            id = ResolverUtil.toString(artifact.getKey());
                             sb.append("      ")
                                     .append(id)
                                     .append(outputAbsoluteArtifactFilename ? ":" + artifactFilename : "")
@@ -246,16 +210,16 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
                         }
                     }
 
-                    for (Artifact parent : parents) {
+                    for (DownloadedArtifact parent : parents) {
                         String parentFilename = null;
                         if (outputAbsoluteArtifactFilename) {
-                            parentFilename = Optional.ofNullable(parent.getFile())
-                                    .map(File::getAbsoluteFile)
-                                    .map(File::getPath)
+                            parentFilename = Optional.ofNullable(parent.getPath())
+                                    .map(Path::toAbsolutePath)
+                                    .map(Path::toString)
                                     .orElse(null);
                         }
                         sb.append("      ")
-                                .append(parent)
+                                .append(ResolverUtil.toString(parent))
                                 .append(outputAbsoluteArtifactFilename ? ":" + parentFilename : "")
                                 .append(System.lineSeparator());
                     }
@@ -270,54 +234,53 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
                     DependencyUtil.write(output, outputFile, appendOutput, encoding);
                 }
             }
-        } catch (IOException
-                | ArtifactResolutionException
-                | DependencyResolutionException
-                | ArtifactDescriptorException e) {
-            throw new MojoExecutionException(e.getMessage(), e);
+        } catch (IOException | RuntimeException e) {
+            throw new MojoException(e.getMessage(), e);
         }
     }
 
     /**
-     * Resolves the chain of parent poms of the given artifact and adds them to {@code parents}.
+     * Resolves the chain of parent poms of the given artifact.
      */
-    private void addParentArtifacts(Artifact artifact, List<ArtifactRepository> repositories, Set<Artifact> parents)
-            throws MojoExecutionException, ArtifactResolutionException, ArtifactDescriptorException {
-        String key = artifact.toString();
-        List<Artifact> chain = parentChains.get(key);
+    private List<DownloadedArtifact> parentChain(Artifact artifact) {
+        String key = artifact.key();
+        List<DownloadedArtifact> chain = parentChains.get(key);
         if (chain == null) {
-            chain = resolveParentChain(artifact, repositories);
+            chain = new ArrayList<>();
+            Set<String> seen = new HashSet<>();
+            Artifact current = getPom(
+                    artifact.getGroupId(),
+                    artifact.getArtifactId(),
+                    artifact.getVersion().toString());
+            while (current != null && seen.add(current.key())) {
+                DownloadedArtifact pom = getResolverUtil()
+                        .resolveArtifact(current, getResolverUtil().getProjectRepositories());
+                Parent parent = session.getService(ModelXmlFactory.class)
+                        .read(XmlReaderRequest.builder()
+                                .path(pom.getPath())
+                                .strict(false)
+                                .build())
+                        .getParent();
+                if (parent == null) {
+                    break;
+                }
+                current = getPom(parent.getGroupId(), parent.getArtifactId(), parent.getVersion());
+                if (seen.contains(current.key())) {
+                    break;
+                }
+                chain.add(getResolverUtil()
+                        .resolveArtifact(current, getResolverUtil().getProjectRepositories()));
+            }
             parentChains.put(key, chain);
-        }
-        parents.addAll(chain);
-    }
-
-    private List<Artifact> resolveParentChain(Artifact artifact, List<ArtifactRepository> repositories)
-            throws MojoExecutionException, ArtifactResolutionException, ArtifactDescriptorException {
-        MavenProject current;
-        try {
-            ProjectBuildingRequest buildingRequest =
-                    new DefaultProjectBuildingRequest(session.getProjectBuildingRequest());
-            buildingRequest.setProcessPlugins(false);
-            buildingRequest.setValidationLevel(VALIDATION_LEVEL_MINIMAL);
-            buildingRequest.setRemoteRepositories(repositories);
-            current = projectBuilder
-                    .build(RepositoryUtils.toArtifact(artifact), buildingRequest)
-                    .getProject();
-        } catch (ProjectBuildingException e) {
-            throw new MojoExecutionException("Could not build project for " + artifact, e);
-        }
-
-        List<Artifact> chain = new ArrayList<>();
-        while (current.hasParent()) {
-            current = current.getParent();
-            chain.add(resolverUtil.resolveArtifact(
-                    RepositoryUtils.toArtifact(current.getArtifact()), current.getRemoteProjectRepositories()));
         }
         return chain;
     }
 
-    private Predicate<Dependency> getDependencyFilter() {
+    private Artifact getPom(String groupId, String artifactId, String version) {
+        return session.createArtifact(groupId, artifactId, version, "", "pom", "pom");
+    }
+
+    private Predicate<org.apache.maven.api.model.Dependency> getDependencyFilter() {
         if (excludeReactor) {
             return new ExcludeReactorProjectsDependencyFilter(session.getProjects());
         } else {
@@ -340,7 +303,7 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
             reactorExclusionFilter = new PluginsReactorExcludeFilter(session.getProjects());
         }
 
-        return resolverUtil.getProjectPlugins(getProject()).stream()
+        return getResolverUtil().getProjectPlugins(getProject()).stream()
                 .filter(reactorExclusionFilter)
                 .filter(pluginsFilter)
                 .collect(Collectors.toSet());

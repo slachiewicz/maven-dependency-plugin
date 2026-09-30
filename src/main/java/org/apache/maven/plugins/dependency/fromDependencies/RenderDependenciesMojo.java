@@ -18,8 +18,6 @@
  */
 package org.apache.maven.plugins.dependency.fromDependencies;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
 import java.io.StringWriter;
@@ -38,24 +36,19 @@ import java.util.Properties;
 import java.util.function.Function;
 import java.util.stream.Collectors;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.MavenProjectHelper;
-import org.apache.maven.project.ProjectBuilder;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.ProducedArtifact;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.ProjectManager;
+import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactsFilter;
 import org.apache.velocity.Template;
 import org.apache.velocity.VelocityContext;
 import org.apache.velocity.app.VelocityEngine;
 import org.apache.velocity.tools.generic.CollectionTool;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 import static java.util.Optional.ofNullable;
 
@@ -64,11 +57,7 @@ import static java.util.Optional.ofNullable;
  *
  * @since 3.9.0
  */
-@Mojo(
-        name = "render-dependencies",
-        requiresDependencyResolution = ResolutionScope.TEST,
-        defaultPhase = LifecyclePhase.GENERATE_SOURCES,
-        threadSafe = true)
+@Mojo(name = "render-dependencies", defaultPhase = "generate-sources")
 public class RenderDependenciesMojo extends AbstractDependencyFilterMojo {
     /**
      * Encoding to write the rendered template.
@@ -106,36 +95,17 @@ public class RenderDependenciesMojo extends AbstractDependencyFilterMojo {
     @Parameter(property = "mdep.template", required = true)
     private String template;
 
-    private final MavenProjectHelper projectHelper;
-
-    @Inject
-    protected RenderDependenciesMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder,
-            ArtifactHandlerManager artifactHandlerManager,
-            MavenProjectHelper projectHelper) {
-        super(session, buildContext, project, resolverUtil, projectBuilder, artifactHandlerManager);
-        this.projectHelper = projectHelper;
-    }
-
-    /**
-     * Main entry into mojo.
-     *
-     * @throws MojoExecutionException with a message if an error occurs
-     */
     @Override
-    protected void doExecute() throws MojoExecutionException {
+    protected void doExecute() throws MojoException {
         // sort them to ease template work and ensure it is deterministic
-        final List<Artifact> artifacts =
+        final List<TemplateArtifact> artifacts =
                 ofNullable(getResolvedDependencies(true)).orElseGet(Collections::emptySet).stream()
-                        .sorted(Comparator.comparing(Artifact::getGroupId)
-                                .thenComparing(Artifact::getArtifactId)
-                                .thenComparing(Artifact::getBaseVersion)
-                                .thenComparing(orEmpty(Artifact::getClassifier))
-                                .thenComparing(orEmpty(Artifact::getType)))
+                        .map(dependency -> new TemplateArtifact((DownloadedDependency) dependency))
+                        .sorted(Comparator.comparing(TemplateArtifact::getGroupId)
+                                .thenComparing(TemplateArtifact::getArtifactId)
+                                .thenComparing(TemplateArtifact::getBaseVersion)
+                                .thenComparing(orEmpty(TemplateArtifact::getClassifier))
+                                .thenComparing(orEmpty(TemplateArtifact::getType)))
                         .collect(Collectors.toList());
 
         if (artifacts.isEmpty()) {
@@ -160,7 +130,7 @@ public class RenderDependenciesMojo extends AbstractDependencyFilterMojo {
      * @param artifacts input
      * @return the template rendered
      */
-    private String render(final List<Artifact> artifacts) {
+    private String render(final List<TemplateArtifact> artifacts) {
         final Path templatePath = getTemplatePath();
         final boolean fromFile = templatePath != null && Files.exists(templatePath);
 
@@ -207,15 +177,15 @@ public class RenderDependenciesMojo extends AbstractDependencyFilterMojo {
      * @param getter nominal getter.
      * @return a comparer of getter defaulting on empty if getter value is null.
      */
-    private Comparator<Artifact> orEmpty(final Function<Artifact, String> getter) {
+    private Comparator<TemplateArtifact> orEmpty(final Function<TemplateArtifact, String> getter) {
         return Comparator.comparing(a -> ofNullable(getter.apply(a)).orElse(""));
     }
 
     /**
      * @param content the rendered template
-     * @throws MojoExecutionException in case of an error
+     * @throws MojoException in case of an error
      */
-    protected void attachFile(final String content) throws MojoExecutionException {
+    protected void attachFile(final String content) throws MojoException {
         final File attachedFile;
         if (outputFile == null) {
             attachedFile = new File(getProject().getBuild().getDirectory(), classifier);
@@ -223,7 +193,14 @@ public class RenderDependenciesMojo extends AbstractDependencyFilterMojo {
         } else { // already written
             attachedFile = outputFile;
         }
-        projectHelper.attachArtifact(getProject(), extension, classifier, attachedFile);
+        ProducedArtifact attached = session.createProducedArtifact(
+                getProject().getGroupId(),
+                getProject().getArtifactId(),
+                getProject().getVersion(),
+                classifier,
+                extension,
+                null);
+        session.getService(ProjectManager.class).attachArtifact(getProject(), attached, attachedFile.toPath());
     }
 
     /**
@@ -231,14 +208,14 @@ public class RenderDependenciesMojo extends AbstractDependencyFilterMojo {
      *
      * @param content the string to write into the file
      */
-    private void store(final String content, final File out) throws MojoExecutionException {
+    private void store(final String content, final File out) throws MojoException {
         // make sure the parent path exists.
         final Path parent = out.toPath().getParent();
         if (parent != null) {
             try {
                 Files.createDirectories(parent);
             } catch (final IOException e) {
-                throw new MojoExecutionException("Error while creating directory '" + parent + "'", e);
+                throw new MojoException("Error while creating directory '" + parent + "'", e);
             }
         }
 
@@ -247,7 +224,7 @@ public class RenderDependenciesMojo extends AbstractDependencyFilterMojo {
             w.write(content);
             getLog().info("Wrote file '" + out + "'.");
         } catch (final IOException ex) {
-            throw new MojoExecutionException("Error while writing to file '" + out, ex);
+            throw new MojoException("Error while writing to file '" + out, ex);
         }
     }
 
@@ -274,5 +251,66 @@ public class RenderDependenciesMojo extends AbstractDependencyFilterMojo {
 
     public void setTemplate(final String template) {
         this.template = template;
+    }
+
+    /**
+     * What a template sees of a dependency. The Maven 4 {@link Dependency} exposes versions and types as objects and
+     * has no file, while templates written for Maven 3 use the getters of {@code org.apache.maven.artifact.Artifact}.
+     */
+    public static class TemplateArtifact {
+        private final DownloadedDependency dependency;
+
+        TemplateArtifact(DownloadedDependency dependency) {
+            this.dependency = dependency;
+        }
+
+        public String getGroupId() {
+            return dependency.getGroupId();
+        }
+
+        public String getArtifactId() {
+            return dependency.getArtifactId();
+        }
+
+        public String getVersion() {
+            return dependency.getVersion().toString();
+        }
+
+        public String getBaseVersion() {
+            return dependency.getBaseVersion().toString();
+        }
+
+        public String getClassifier() {
+            return dependency.getClassifier();
+        }
+
+        public String getType() {
+            return dependency.getType().id();
+        }
+
+        public String getScope() {
+            return dependency.getScope().id();
+        }
+
+        public boolean isOptional() {
+            return dependency.isOptional();
+        }
+
+        public File getFile() {
+            return dependency.getPath() == null ? null : dependency.getPath().toFile();
+        }
+
+        public String getId() {
+            return DependencyUtil.getId(dependency);
+        }
+
+        public String getDependencyConflictId() {
+            return DependencyUtil.getDependencyConflictId(dependency);
+        }
+
+        @Override
+        public String toString() {
+            return DependencyUtil.toString(dependency);
+        }
     }
 }

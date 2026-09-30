@@ -18,36 +18,28 @@
  */
 package org.apache.maven.plugins.dependency.utils;
 
-import javax.inject.Inject;
-import javax.inject.Named;
-import javax.inject.Singleton;
-
 import java.io.File;
 import java.io.IOException;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
 import org.codehaus.plexus.util.FileUtils;
-import org.slf4j.Logger;
-import org.slf4j.LoggerFactory;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Provide a copyFile method in one place.
  *
  * @since 3.7.0
  */
-@Named
-@Singleton
 public class CopyUtil {
 
-    private final BuildContext buildContext;
+    private final Log logger;
 
-    private final Logger logger = LoggerFactory.getLogger(CopyUtil.class);
-
-    @Inject
-    public CopyUtil(BuildContext buildContext) {
-        this.buildContext = buildContext;
+    /**
+     * @param logger the logger of the mojo
+     */
+    public CopyUtil(Log logger) {
+        this.logger = logger;
     }
 
     /**
@@ -56,20 +48,21 @@ public class CopyUtil {
      * @param sourceArtifact the artifact (file) to copy
      * @param destination file name of destination file
      * @throws IOException if copy has failed
-     * @throws MojoExecutionException if artifact file is a directory (which has not been packaged yet)
+     * @throws MojoException if artifact file is a directory (which has not been packaged yet)
      * @since 3.7.0
      */
-    public void copyArtifactFile(Artifact sourceArtifact, File destination) throws IOException, MojoExecutionException {
-        File source = sourceArtifact.getFile();
+    public void copyArtifactFile(DownloadedDependency sourceArtifact, File destination)
+            throws IOException, MojoException {
+        File source = sourceArtifact.getPath().toFile();
         if (source.isDirectory()) {
             // usual case is a future jar packaging, but there are special cases: classifier and other packaging
-            throw new MojoExecutionException("Artifact '" + sourceArtifact
+            throw new MojoException("Artifact '" + sourceArtifact
                     + "' has not been packaged yet (is a directory). When used on reactor artifact, "
                     + "copy should be executed after packaging: see MDEP-187.");
         }
-        logger.debug("Copying artifact '{}' ({}) to {}", sourceArtifact.getId(), sourceArtifact.getFile(), destination);
+        logger.debug(
+                "Copying artifact '" + DependencyUtil.getId(sourceArtifact) + "' (" + source + ") to " + destination);
         FileUtils.copyFile(source, destination);
-        buildContext.refresh(destination);
     }
 
     /**
@@ -81,8 +74,7 @@ public class CopyUtil {
      * @since 3.2.0
      */
     public void copyFile(File source, File destination) throws IOException {
-        logger.debug("Copying file '{}' to {}", source, destination);
+        logger.debug("Copying file '" + source + "' to " + destination);
         FileUtils.copyFile(source, destination);
-        buildContext.refresh(destination);
     }
 }

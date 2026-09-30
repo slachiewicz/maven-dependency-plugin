@@ -18,7 +18,7 @@
  */
 package org.apache.maven.plugins.dependency.utils.filters;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Dependency;
 import org.apache.maven.shared.artifact.filter.collection.AbstractArtifactFeatureFilter;
 
 /**
@@ -61,7 +61,7 @@ public class GroupIdFilter extends AbstractArtifactFeatureFilter {
 
     /** {@inheritDoc} */
     @Override
-    protected String getArtifactFeature(final Artifact artifact) {
+    protected String getArtifactFeature(final Dependency artifact) {
         return artifact.getGroupId();
     }
 

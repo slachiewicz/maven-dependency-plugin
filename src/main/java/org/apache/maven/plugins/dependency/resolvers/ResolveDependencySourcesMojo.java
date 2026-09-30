@@ -18,25 +18,16 @@
  */
 package org.apache.maven.plugins.dependency.resolvers;
 
-import javax.inject.Inject;
-
 import java.util.Collections;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
 import org.apache.maven.plugins.dependency.utils.translators.ArtifactTranslator;
 import org.apache.maven.plugins.dependency.utils.translators.ClassifierTypeTranslator;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Goal that resolves the project source dependencies from the repository.
@@ -44,11 +35,7 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  * @since 2.0-alpha2/3.7.0
  */
-@Mojo(
-        name = "resolve-sources",
-        defaultPhase = LifecyclePhase.GENERATE_SOURCES,
-        requiresDependencyCollection = ResolutionScope.TEST,
-        threadSafe = true)
+@Mojo(name = "resolve-sources", defaultPhase = "generate-sources")
 public class ResolveDependencySourcesMojo extends ResolveDependenciesMojo {
 
     private static final String SOURCES_CLASSIFIER = "sources";
@@ -57,30 +44,17 @@ public class ResolveDependencySourcesMojo extends ResolveDependenciesMojo {
 
     private static final String TESTS_CLASSIFIER = "tests";
 
-    private final ArtifactHandlerManager artifactHandlerManager;
-
-    @Inject
-    // CHECKSTYLE_OFF: ParameterNumber
-    public ResolveDependencySourcesMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder,
-            ArtifactHandlerManager artifactHandlerManager) {
-        super(session, buildContext, project, resolverUtil, projectBuilder, artifactHandlerManager);
-        this.artifactHandlerManager = artifactHandlerManager;
-    }
-    // CHECKSTYLE_ON: ParameterNumber
-
     @Override
     protected boolean isResolvingAfterFiltering() {
         return true;
     }
 
-    @Parameter(name = "classifier", defaultValue = SOURCES_CLASSIFIER, readonly = true)
-    public void setClassifier(String classifier) {
-        this.classifier = classifier;
+    // the Maven 3 version fixed the classifier with a read-only parameter on a setter, which the Maven 4
+    // descriptor generator does not support: fix it when running
+    @Override
+    protected void doExecute() throws MojoException {
+        this.classifier = SOURCES_CLASSIFIER;
+        super.doExecute();
     }
 
     /**
@@ -89,12 +63,11 @@ public class ResolveDependencySourcesMojo extends ResolveDependenciesMojo {
      */
     @Override
     protected ArtifactTranslator createArtifactTranslator() {
-        ArtifactTranslator sources = new ClassifierTypeTranslator(artifactHandlerManager, classifier, type);
-        ArtifactTranslator testSources =
-                new ClassifierTypeTranslator(artifactHandlerManager, TEST_SOURCES_CLASSIFIER, type);
+        ArtifactTranslator sources = new ClassifierTypeTranslator(session, classifier, type);
+        ArtifactTranslator testSources = new ClassifierTypeTranslator(session, TEST_SOURCES_CLASSIFIER, type);
         return (artifacts, log) -> {
-            Set<org.eclipse.aether.artifact.Artifact> results = new LinkedHashSet<>();
-            for (Artifact artifact : artifacts) {
+            Set<Artifact> results = new LinkedHashSet<>();
+            for (Dependency artifact : artifacts) {
                 ArtifactTranslator translator =
                         TESTS_CLASSIFIER.equals(artifact.getClassifier()) ? testSources : sources;
                 results.addAll(translator.translate(Collections.singleton(artifact), log));

@@ -21,7 +21,7 @@ package org.apache.maven.plugins.dependency.utils;
 import java.util.HashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Dependency;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -32,7 +32,7 @@ class TestDependencyStatusSets {
     @Test
     void testDependencyStatusSettersGetters() {
         DependencyStatusSets dss = new DependencyStatusSets();
-        Set<Artifact> set = new HashSet<>();
+        Set<Dependency> set = new HashSet<>();
         dss.setResolvedDependencies(set);
         assertEquals(set, dss.getResolvedDependencies());
 
@@ -51,9 +51,9 @@ class TestDependencyStatusSets {
 
     @Test
     void testDependencyStatusConstructor() {
-        Set<Artifact> r = new HashSet<>();
-        Set<Artifact> u = new HashSet<>();
-        Set<Artifact> s = new HashSet<>();
+        Set<Dependency> r = new HashSet<>();
+        Set<Dependency> u = new HashSet<>();
+        Set<Dependency> s = new HashSet<>();
         DependencyStatusSets dss = new DependencyStatusSets(r, u, s);
         assertEquals(r, dss.getResolvedDependencies());
         assertEquals(u, dss.getUnResolvedDependencies());

@@ -23,11 +23,9 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.ArtifactUtils;
-import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
-import org.apache.maven.plugin.logging.Log;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.plugin.Log;
 import org.apache.maven.shared.artifact.filter.collection.AbstractArtifactsFilter;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactFilterException;
 
@@ -40,26 +38,25 @@ public class ExcludeReactorProjectsArtifactFilter extends AbstractArtifactsFilte
     private final Log log;
     private final Set<String> reactorArtifactKeys;
 
-    public ExcludeReactorProjectsArtifactFilter(final List<MavenProject> reactorProjects, final Log log) {
+    public ExcludeReactorProjectsArtifactFilter(final List<Project> reactorProjects, final Log log) {
         this.log = log;
         this.reactorArtifactKeys = new HashSet<>(reactorProjects.size());
-        for (final MavenProject project : reactorProjects) {
-            this.reactorArtifactKeys.add(ArtifactUtils.key(project.getArtifact()));
+        for (final Project project : reactorProjects) {
+            this.reactorArtifactKeys.add(
+                    project.getGroupId() + ":" + project.getArtifactId() + ":" + project.getVersion());
         }
     }
 
     @Override
-    public Set<Artifact> filter(final Set<Artifact> artifacts) throws ArtifactFilterException {
-        final Set<Artifact> results = new LinkedHashSet<>(artifacts.size());
+    public Set<Dependency> filter(final Set<Dependency> artifacts) throws ArtifactFilterException {
+        final Set<Dependency> results = new LinkedHashSet<>(artifacts.size());
 
-        for (final Artifact artifact : artifacts) {
+        for (final Dependency artifact : artifacts) {
             if (!isArtifactInReactor(artifact)) {
                 results.add(artifact);
             } else {
                 if (log.isDebugEnabled()) {
-                    log.debug("Skipped artifact "
-                            + ArtifactUtils.key(artifact)
-                            + " because it is present in the reactor");
+                    log.debug("Skipped artifact " + key(artifact) + " because it is present in the reactor");
                 }
             }
         }
@@ -67,9 +64,9 @@ public class ExcludeReactorProjectsArtifactFilter extends AbstractArtifactsFilte
         return results;
     }
 
-    private boolean isArtifactInReactor(final Artifact artifact) {
+    private boolean isArtifactInReactor(final Dependency artifact) {
         for (final String reactorArtifactKey : this.reactorArtifactKeys) {
-            final String artifactKey = ArtifactUtils.key(artifact);
+            final String artifactKey = key(artifact);
 
             // This check only includes GAV. Should we take a look at the types, too?
             if (reactorArtifactKey.equals(artifactKey)) {
@@ -77,5 +74,9 @@ public class ExcludeReactorProjectsArtifactFilter extends AbstractArtifactsFilte
             }
         }
         return false;
+    }
+
+    private static String key(Dependency artifact) {
+        return artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getVersion();
     }
 }

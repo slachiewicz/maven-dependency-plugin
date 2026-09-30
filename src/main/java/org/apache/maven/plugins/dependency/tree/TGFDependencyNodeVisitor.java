@@ -112,7 +112,12 @@ public class TGFDependencyNodeVisitor extends AbstractSerializingVisitor impleme
             } else {
                 DependencyNode parent = node.getParent();
                 // using scope as edge label.
-                edges.add(new EdgeAppender(parent, node, node.getArtifact().getScope()));
+                edges.add(new EdgeAppender(
+                        parent,
+                        node,
+                        node.getDependency() != null
+                                ? node.getDependency().getScope().id()
+                                : null));
             }
             return true;
         } catch (IOException e) {

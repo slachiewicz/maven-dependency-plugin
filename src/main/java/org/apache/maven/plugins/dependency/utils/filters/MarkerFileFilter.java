@@ -21,8 +21,9 @@ package org.apache.maven.plugins.dependency.utils.filters;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.plugins.dependency.fromConfiguration.ArtifactItem;
 import org.apache.maven.plugins.dependency.utils.markers.MarkerHandler;
 import org.apache.maven.shared.artifact.filter.collection.AbstractArtifactsFilter;
@@ -64,11 +65,11 @@ public class MarkerFileFilter extends AbstractArtifactsFilter implements Artifac
      * org.apache.maven.plugin.logging.Log)
      */
     @Override
-    public Set<Artifact> filter(Set<Artifact> artifacts) throws ArtifactFilterException {
-        Set<Artifact> result = new LinkedHashSet<>();
+    public Set<Dependency> filter(Set<Dependency> artifacts) throws ArtifactFilterException {
+        Set<Dependency> result = new LinkedHashSet<>();
 
-        for (Artifact artifact : artifacts) {
-            if (isArtifactIncluded(new ArtifactItem(artifact))) {
+        for (Dependency artifact : artifacts) {
+            if (isArtifactIncluded(new ArtifactItem((DownloadedDependency) artifact))) {
                 result.add(artifact);
             }
         }
@@ -78,7 +79,7 @@ public class MarkerFileFilter extends AbstractArtifactsFilter implements Artifac
 
     @Override
     public boolean isArtifactIncluded(ArtifactItem item) throws ArtifactFilterException {
-        Artifact artifact = item.getArtifact();
+        DownloadedDependency artifact = item.getArtifact();
 
         boolean overWrite = (artifact.isSnapshot() && this.overWriteSnapshots)
                 || (!artifact.isSnapshot() && this.overWriteReleases);
@@ -87,7 +88,7 @@ public class MarkerFileFilter extends AbstractArtifactsFilter implements Artifac
 
         try {
             return overWrite || !handler.isMarkerSet() || (overWriteIfNewer && handler.isMarkerOlder(artifact));
-        } catch (MojoExecutionException e) {
+        } catch (MojoException e) {
             throw new ArtifactFilterException(e.getMessage(), e);
         }
     }

@@ -22,9 +22,8 @@ import java.io.StringWriter;
 import java.util.Arrays;
 import java.util.Collections;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -34,11 +33,11 @@ class MermaidDependencyNodeVisitorTest {
     @Test
     void writesNodesOnceAndEdgesWithScope() {
         // root -> a -> c, root -> b(test) -> c
-        DependencyNode root = node(null, "root", Artifact.SCOPE_COMPILE);
-        DependencyNode a = node(root, "a", Artifact.SCOPE_COMPILE);
-        DependencyNode b = node(root, "b", Artifact.SCOPE_TEST);
-        DependencyNode ac = node(a, "c", Artifact.SCOPE_COMPILE);
-        DependencyNode bc = node(b, "c", Artifact.SCOPE_TEST);
+        DependencyNode root = node(null, "root", "compile");
+        DependencyNode a = node(root, "a", "compile");
+        DependencyNode b = node(root, "b", "test");
+        DependencyNode ac = node(a, "c", "compile");
+        DependencyNode bc = node(b, "c", "test");
         root.setChildren(Arrays.asList(a, b));
         a.setChildren(Collections.singletonList(ac));
         b.setChildren(Collections.singletonList(bc));
@@ -61,13 +60,14 @@ class MermaidDependencyNodeVisitorTest {
     void writesALoneRoot() {
         assertEquals(
                 "graph LR" + System.lineSeparator() + "\tn0[\"root\"]" + System.lineSeparator(),
-                render(node(null, "root", Artifact.SCOPE_COMPILE)));
+                render(node(null, "root", "compile")));
     }
 
     @Test
     void escapesQuotesInLabelsAndLeavesOutEmptyScope() {
-        DependencyNode root = new DependencyNode(null, artifact("root", ""), "say \"hi\"");
-        DependencyNode child = new DependencyNode(root, artifact("child", ""), "(child - omitted for duplicate)");
+        DependencyNode root = new DependencyNode(null, artifact("root", null), null, "say \"hi\"");
+        DependencyNode child =
+                new DependencyNode(root, artifact("child", null), null, "(child - omitted for duplicate)");
         root.setChildren(Collections.singletonList(child));
 
         String nl = System.lineSeparator();
@@ -86,10 +86,11 @@ class MermaidDependencyNodeVisitorTest {
     }
 
     private static DependencyNode node(DependencyNode parent, String artifactId, String scope) {
-        return new DependencyNode(parent, artifact(artifactId, scope), artifactId);
+        Dependency dependency = artifact(artifactId, scope);
+        return new DependencyNode(parent, dependency, dependency, artifactId);
     }
 
-    private static Artifact artifact(String artifactId, String scope) {
-        return new DefaultArtifact("g", artifactId, "1.0", scope, "jar", null, new DefaultArtifactHandler("jar"));
+    private static Dependency artifact(String artifactId, String scope) {
+        return DependencyStubs.dependency("g", artifactId, "1.0", scope, "jar", null);
     }
 }

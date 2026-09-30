@@ -18,10 +18,10 @@
  */
 package org.apache.maven.plugins.dependency.fromDependencies;
 
-import org.apache.maven.model.Dependency;
+import org.apache.maven.api.DependencyCoordinates;
 
 @FunctionalInterface
 public interface DependencyMatcher {
 
-    boolean matches(Dependency dependency);
+    boolean matches(DependencyCoordinates dependency);
 }

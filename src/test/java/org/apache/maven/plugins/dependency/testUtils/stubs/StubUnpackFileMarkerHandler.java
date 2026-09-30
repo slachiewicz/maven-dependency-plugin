@@ -21,6 +21,7 @@ package org.apache.maven.plugins.dependency.testUtils.stubs;
 import java.io.File;
 
 import org.apache.maven.plugins.dependency.fromConfiguration.ArtifactItem;
+import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.apache.maven.plugins.dependency.utils.markers.UnpackFileMarkerHandler;
 
 public class StubUnpackFileMarkerHandler extends UnpackFileMarkerHandler {
@@ -35,7 +36,8 @@ public class StubUnpackFileMarkerHandler extends UnpackFileMarkerHandler {
                 || this.artifactItem.getIncludes().isEmpty()
                         && this.artifactItem.getExcludes().isEmpty()) {
             markerFile = new StubMarkerFile(
-                    this.markerFilesDirectory, this.artifact.getId().replace(':', '-') + ".marker");
+                    this.markerFilesDirectory,
+                    DependencyUtil.getId(this.artifact).replace(':', '-') + ".marker");
         } else {
             int includeExcludeHash = 0;
 
@@ -48,7 +50,8 @@ public class StubUnpackFileMarkerHandler extends UnpackFileMarkerHandler {
             }
 
             markerFile = new StubMarkerFile(
-                    this.markerFilesDirectory, this.artifact.getId().replace(':', '-') + includeExcludeHash);
+                    this.markerFilesDirectory,
+                    DependencyUtil.getId(this.artifact).replace(':', '-') + includeExcludeHash);
         }
 
         return markerFile;

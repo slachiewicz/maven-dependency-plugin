@@ -20,7 +20,8 @@ package org.apache.maven.plugins.dependency.fromDependencies;
 
 import java.util.stream.Stream;
 
-import org.apache.maven.model.Dependency;
+import org.apache.maven.api.DependencyCoordinates;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -39,7 +40,7 @@ class GraphRootMatcherTest {
 
     @ParameterizedTest
     @MethodSource
-    void match(GraphRoot graphRoot, Dependency dependency, boolean result) {
+    void match(GraphRoot graphRoot, DependencyCoordinates dependency, boolean result) {
         assertThat(new GraphRootMatcher(graphRoot).matches(dependency)).isEqualTo(result);
     }
 
@@ -59,10 +60,7 @@ class GraphRootMatcherTest {
         return graphRoot;
     }
 
-    private static Dependency newDependency(String groupId, String artifactId) {
-        Dependency dependency = new Dependency();
-        dependency.setGroupId(groupId);
-        dependency.setArtifactId(artifactId);
-        return dependency;
+    private static DependencyCoordinates newDependency(String groupId, String artifactId) {
+        return DependencyStubs.coordinates(groupId, artifactId);
     }
 }

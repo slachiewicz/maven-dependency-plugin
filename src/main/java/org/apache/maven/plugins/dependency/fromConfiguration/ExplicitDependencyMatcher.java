@@ -22,33 +22,23 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Objects;
 
-import org.apache.maven.artifact.handler.ArtifactHandler;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.artifact.versioning.DefaultArtifactVersion;
-import org.apache.maven.artifact.versioning.InvalidVersionSpecificationException;
-import org.apache.maven.artifact.versioning.VersionRange;
-import org.apache.maven.model.Dependency;
+import org.apache.maven.api.DependencyCoordinates;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.Type;
+import org.apache.maven.api.services.TypeRegistry;
 
 /**
- * Checks that artifact items correspond to dependencies declared in the project, so that Maven sees them when it
- * orders the reactor.
- * <p>
- * Items and dependencies are compared on groupId, artifactId, extension and classifier. The type is translated with
- * the artifact handler, so {@code type=test-jar} equals {@code type=jar} with {@code classifier=tests}. The type
- * defaults to {@code jar} and an empty classifier is no classifier. A declared dependency of type {@code pom}
- * matches every type and classifier. The mojo fills in a missing item version before the check. A declared
- * version range matches an item version it contains; an item version range is only matched by an identical
- * declaration, because the goal resolves such a range to the highest available version, which may not be the
- * declared one.
+ * Checks that artifact items are declared as dependencies of the project, with the same version. The mojo fills in a
+ * missing item version before the check.
  */
 final class ExplicitDependencyMatcher {
-    private final ArtifactHandlerManager artifactHandlerManager;
+    private final Session session;
 
-    private final List<Dependency> declared;
+    private final List<DependencyCoordinates> declared;
 
-    ExplicitDependencyMatcher(ArtifactHandlerManager artifactHandlerManager, List<Dependency> declared) {
-        this.artifactHandlerManager = artifactHandlerManager;
-        this.declared = declared == null ? new ArrayList<Dependency>() : declared;
+    ExplicitDependencyMatcher(Session session, List<DependencyCoordinates> declared) {
+        this.session = session;
+        this.declared = declared == null ? new ArrayList<DependencyCoordinates>() : declared;
     }
 
     /**
@@ -75,23 +65,24 @@ final class ExplicitDependencyMatcher {
 
         List<String> declaredVersions = new ArrayList<>();
         List<String> otherVariants = new ArrayList<>();
-        for (Dependency dependency : declared) {
+        for (DependencyCoordinates dependency : declared) {
             if (!Objects.equals(item.getGroupId(), dependency.getGroupId())
                     || !Objects.equals(item.getArtifactId(), dependency.getArtifactId())) {
                 continue;
             }
+            String declaredType = dependency.getType().id();
             // The reactor orders on groupId:artifactId:version only, so a pom declaration covers every variant.
-            boolean sameVariant = "pom".equals(dependency.getType())
-                    || (extension.equals(extension(dependency.getType()))
-                            && Objects.equals(
-                                    classifier, classifier(dependency.getType(), dependency.getClassifier())));
+            boolean sameVariant = "pom".equals(declaredType)
+                    || (extension.equals(extension(declaredType))
+                            && Objects.equals(classifier, classifier(declaredType, dependency.getClassifier())));
             if (sameVariant) {
-                if (version.isEmpty() || versionsMatch(version, dependency.getVersion())) {
+                String declaredVersion = dependency.getVersionConstraint().toString();
+                if (version.isEmpty() || versionsMatch(version, declaredVersion)) {
                     return null;
                 }
-                declaredVersions.add(String.valueOf(dependency.getVersion()));
+                declaredVersions.add(declaredVersion);
             } else {
-                String other = dependency.getType() == null ? "jar" : dependency.getType();
+                String other = declaredType;
                 if (dependency.getClassifier() != null
                         && !dependency.getClassifier().isEmpty()) {
                     other += ":" + dependency.getClassifier();
@@ -115,7 +106,7 @@ final class ExplicitDependencyMatcher {
      * @return {@code true} if there is such a dependency
      */
     boolean isDeclaredInAnyVariant(ArtifactItem item) {
-        for (Dependency dependency : declared) {
+        for (DependencyCoordinates dependency : declared) {
             if (Objects.equals(item.getGroupId(), dependency.getGroupId())
                     && Objects.equals(item.getArtifactId(), dependency.getArtifactId())) {
                 return true;
@@ -124,31 +115,38 @@ final class ExplicitDependencyMatcher {
         return false;
     }
 
-    static boolean versionsMatch(String itemVersion, String declaredVersion) {
+    /**
+     * A declared version range matches an item version it contains; an item version range is only matched by an
+     * identical declaration, because the goal resolves such a range to the highest available version, which may not
+     * be the declared one.
+     */
+    boolean versionsMatch(String itemVersion, String declaredVersion) {
         if (itemVersion.equals(declaredVersion)) {
             return true;
         }
         return declaredVersion != null && contains(declaredVersion, itemVersion);
     }
 
-    private static boolean contains(String rangeSpec, String version) {
+    private boolean contains(String rangeSpec, String version) {
         if (!rangeSpec.startsWith("[") && !rangeSpec.startsWith("(")) {
             return false;
         }
         try {
-            return VersionRange.createFromVersionSpec(rangeSpec).containsVersion(new DefaultArtifactVersion(version));
-        } catch (InvalidVersionSpecificationException e) {
+            return session.parseVersionRange(rangeSpec).contains(session.parseVersion(version));
+        } catch (RuntimeException e) {
             return false;
         }
     }
 
-    private ArtifactHandler handler(String type) {
-        return artifactHandlerManager.getArtifactHandler(type == null || type.isEmpty() ? "jar" : type);
+    private Type type(String type) {
+        return session.getService(TypeRegistry.class)
+                .lookup(type == null || type.isEmpty() ? Type.JAR : type)
+                .orElse(null);
     }
 
     private String extension(String type) {
-        ArtifactHandler handler = handler(type);
-        String extension = handler == null ? null : handler.getExtension();
+        Type resolved = type(type);
+        String extension = resolved == null ? null : resolved.getExtension();
         return extension != null ? extension : type == null || type.isEmpty() ? "jar" : type;
     }
 
@@ -156,8 +154,8 @@ final class ExplicitDependencyMatcher {
         if (classifier != null && !classifier.isEmpty()) {
             return classifier;
         }
-        ArtifactHandler handler = handler(type);
-        String fromHandler = handler == null ? null : handler.getClassifier();
-        return fromHandler == null || fromHandler.isEmpty() ? null : fromHandler;
+        Type resolved = type(type);
+        String fromType = resolved == null ? null : resolved.getClassifier();
+        return fromType == null || fromType.isEmpty() ? null : fromType;
     }
 }

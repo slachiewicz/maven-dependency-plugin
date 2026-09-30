@@ -23,7 +23,7 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Dependency;
 import org.apache.maven.shared.artifact.filter.StrictPatternExcludesArtifactFilter;
 import org.apache.maven.shared.artifact.filter.StrictPatternIncludesArtifactFilter;
 import org.apache.maven.shared.artifact.filter.collection.AbstractArtifactsFilter;
@@ -57,11 +57,11 @@ public class PatternsArtifactsFilter extends AbstractArtifactsFilter {
     }
 
     @Override
-    public Set<Artifact> filter(Set<Artifact> artifacts) throws ArtifactFilterException {
-        Set<Artifact> result = new LinkedHashSet<>();
-        for (Artifact artifact : artifacts) {
-            if ((excludesFilter == null || excludesFilter.include(artifact))
-                    && (includesFilter == null || includesFilter.include(artifact))) {
+    public Set<Dependency> filter(Set<Dependency> artifacts) throws ArtifactFilterException {
+        Set<Dependency> result = new LinkedHashSet<>();
+        for (Dependency artifact : artifacts) {
+            if ((excludesFilter == null || excludesFilter.test(artifact))
+                    && (includesFilter == null || includesFilter.test(artifact))) {
                 result.add(artifact);
             }
         }

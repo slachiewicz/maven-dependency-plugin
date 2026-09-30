@@ -23,8 +23,9 @@ import java.util.Collections;
 import java.util.List;
 import java.util.function.Predicate;
 
-import org.apache.maven.artifact.Artifact;
-import org.eclipse.aether.repository.RemoteRepository;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.RemoteRepository;
 
 /**
  * A node of the dependency tree displayed by the {@link TreeMojo}.
@@ -33,6 +34,8 @@ public class DependencyNode {
     private final DependencyNode parent;
 
     private final Artifact artifact;
+
+    private final Dependency dependency;
 
     private final String nodeString;
 
@@ -44,8 +47,6 @@ public class DependencyNode {
 
     private boolean bringsOthers;
 
-    private org.eclipse.aether.artifact.Artifact resolverArtifact;
-
     private List<RemoteRepository> repositories = Collections.emptyList();
 
     private Long size;
@@ -54,17 +55,27 @@ public class DependencyNode {
 
     /**
      * @param parent the parent node, or <code>null</code> for the root
-     * @param artifact the artifact of this node
+     * @param artifact the artifact of this node, for the root the artifact of the project
+     * @param dependency the dependency of this node, <code>null</code> for the root, which is the project and has no
+     *            dependency in the Maven 4 API
      * @param nodeString the label of this node
      */
-    public DependencyNode(DependencyNode parent, Artifact artifact, String nodeString) {
+    public DependencyNode(DependencyNode parent, Artifact artifact, Dependency dependency, String nodeString) {
         this.parent = parent;
         this.artifact = artifact;
+        this.dependency = dependency;
         this.nodeString = nodeString;
     }
 
     public Artifact getArtifact() {
         return artifact;
+    }
+
+    /**
+     * @return the dependency of this node, or <code>null</code> for the root
+     */
+    public Dependency getDependency() {
+        return dependency;
     }
 
     public DependencyNode getParent() {
@@ -95,28 +106,29 @@ public class DependencyNode {
         this.verboseInfo = verboseInfo;
     }
 
+    /**
+     * @return whether the sizes of the artifacts have been computed
+     */
     boolean hasSizes() {
         return sized;
     }
 
     /**
-     * @return the size in bytes of the file of the artifact, or <code>null</code> if it is not known, or for the root
-     *         node, which is the project
+     * @return the size in bytes of the file of the artifact, <code>null</code> if it is unknown
      */
     Long getSize() {
         return size;
     }
 
     /**
-     * @return the size in bytes of the distinct artifacts this node brings in, itself included, those of unknown size
-     *         counted as zero
+     * @return the size in bytes of the distinct artifacts that this node brings in, itself included
      */
     long getTotalSize() {
         return totalSize;
     }
 
     /**
-     * @return whether the node brings in artifacts other than its own
+     * @return whether this node brings in other artifacts than its own
      */
     boolean bringsOthers() {
         return bringsOthers;
@@ -130,22 +142,13 @@ public class DependencyNode {
     }
 
     /**
-     * @return the artifact of the resolver graph, which keeps the <code>systemPath</code> of a dependency of scope
-     *         <code>system</code>, or <code>null</code>
-     */
-    org.eclipse.aether.artifact.Artifact getResolverArtifact() {
-        return resolverArtifact;
-    }
-
-    /**
-     * @return the repositories the artifact can be resolved from, empty if not known
+     * @return the repositories the artifact of this node can be resolved from
      */
     List<RemoteRepository> getRepositories() {
         return repositories;
     }
 
-    void setResolution(org.eclipse.aether.artifact.Artifact resolverArtifact, List<RemoteRepository> repositories) {
-        this.resolverArtifact = resolverArtifact;
+    void setRepositories(List<RemoteRepository> repositories) {
         this.repositories = repositories == null ? Collections.<RemoteRepository>emptyList() : repositories;
     }
 
@@ -188,9 +191,9 @@ public class DependencyNode {
             return null;
         }
 
-        DependencyNode copy = new DependencyNode(newParent, artifact, nodeString);
+        DependencyNode copy = new DependencyNode(newParent, artifact, dependency, nodeString);
         copy.setVerboseInfo(verboseInfo);
-        copy.setResolution(resolverArtifact, repositories);
+        copy.setRepositories(repositories);
         List<DependencyNode> copiedChildren = new ArrayList<>(children.size());
         for (DependencyNode child : children) {
             DependencyNode copiedChild = child.filter(copy, keep, include);

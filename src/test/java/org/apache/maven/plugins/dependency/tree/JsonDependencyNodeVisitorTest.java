@@ -25,9 +25,8 @@ import java.util.Collections;
 import jakarta.json.Json;
 import jakarta.json.JsonObject;
 import jakarta.json.JsonReader;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.apache.maven.plugins.dependency.tree.DependencyNode.VerboseInfo;
 import org.junit.jupiter.api.Test;
 
@@ -39,7 +38,7 @@ class JsonDependencyNodeVisitorTest {
 
     @Test
     void nodeWithoutVerboseInfoHasNoVerboseFields() {
-        JsonObject json = toJson(new DependencyNode(null, artifact("a", "1.0"), "a"));
+        JsonObject json = toJson(node(null, "a", "1.0", "a"));
 
         assertEquals(7, json.size());
         assertEquals("false", json.getString("optional"));
@@ -48,7 +47,7 @@ class JsonDependencyNodeVisitorTest {
 
     @Test
     void includedNodeReportsIncludedAndManagement() {
-        DependencyNode node = new DependencyNode(null, artifact("a", "2.0"), "a");
+        DependencyNode node = node(null, "a", "2.0", "a");
         node.setVerboseInfo(new VerboseInfo(null, null, "1.0", "test", "compile"));
 
         JsonObject json = toJson(node);
@@ -63,7 +62,7 @@ class JsonDependencyNodeVisitorTest {
 
     @Test
     void omittedForDuplicateHasReasonButNoWinnerVersion() {
-        DependencyNode node = new DependencyNode(null, artifact("a", "1.0"), "a");
+        DependencyNode node = node(null, "a", "1.0", "a");
         node.setVerboseInfo(new VerboseInfo(VerboseInfo.OMITTED_FOR_DUPLICATE, "1.0", null, null, null));
 
         JsonObject json = toJson(node);
@@ -75,7 +74,7 @@ class JsonDependencyNodeVisitorTest {
 
     @Test
     void omittedForConflictHasWinnerVersion() {
-        DependencyNode node = new DependencyNode(null, artifact("a", "1.0"), "a");
+        DependencyNode node = node(null, "a", "1.0", "a");
         node.setVerboseInfo(new VerboseInfo(VerboseInfo.OMITTED_FOR_CONFLICT, "2.0", null, null, null));
 
         JsonObject json = toJson(node);
@@ -87,8 +86,8 @@ class JsonDependencyNodeVisitorTest {
 
     @Test
     void verboseFieldsOfChildrenAreNestedAndOutputStaysValidJson() {
-        DependencyNode root = new DependencyNode(null, artifact("root", "1.0"), "root");
-        DependencyNode child = new DependencyNode(root, artifact("child", "1.0"), "child");
+        DependencyNode root = node(null, "root", "1.0", "root");
+        DependencyNode child = node(root, "child", "1.0", "child");
         child.setVerboseInfo(new VerboseInfo(VerboseInfo.OMITTED_FOR_DUPLICATE, "1.0", null, null, null));
         root.setChildren(Collections.singletonList(child));
 
@@ -100,15 +99,31 @@ class JsonDependencyNodeVisitorTest {
 
     private static JsonObject toJson(DependencyNode node) {
         StringWriter writer = new StringWriter();
-        node.accept(new JsonDependencyNodeVisitor(writer));
+        node.accept(new JsonDependencyNodeVisitor(writer, "jar"));
         System.setProperty("jakarta.json.provider", "org.glassfish.json.JsonProviderImpl");
         try (JsonReader reader = Json.createReader(new StringReader(writer.toString()))) {
             return reader.readObject();
         }
     }
 
-    private static Artifact artifact(String artifactId, String version) {
-        return new DefaultArtifact(
-                "g", artifactId, version, Artifact.SCOPE_COMPILE, "jar", null, new DefaultArtifactHandler("jar"));
+    private static DependencyNode node(DependencyNode parent, String artifactId, String version, String label) {
+        Dependency dependency = DependencyStubs.dependency("g", artifactId, version, "compile", "jar", null);
+        return new DependencyNode(parent, dependency, dependency, label);
+    }
+
+    @Test
+    void readsTheVerboseInfoFromTheResolverLabel() {
+        VerboseInfo conflict = DependencyTreeBuilder.verboseInfo(
+                "(g:a:jar:1.0:compile - version managed from 0.9; omitted for conflict with 2.0)");
+        assertEquals(VerboseInfo.OMITTED_FOR_CONFLICT, conflict.getOmittedReason());
+        assertEquals("2.0", conflict.getWinnerVersion());
+        assertEquals("0.9", conflict.getPremanagedVersion());
+
+        VerboseInfo duplicate = DependencyTreeBuilder.verboseInfo("(g:a:jar:1.0:compile - omitted for duplicate)");
+        assertEquals(VerboseInfo.OMITTED_FOR_DUPLICATE, duplicate.getOmittedReason());
+
+        VerboseInfo included = DependencyTreeBuilder.verboseInfo("g:a:jar:1.0:compile (scope managed from test)");
+        assertTrue(included.isIncluded());
+        assertEquals("test", included.getPremanagedScope());
     }
 }

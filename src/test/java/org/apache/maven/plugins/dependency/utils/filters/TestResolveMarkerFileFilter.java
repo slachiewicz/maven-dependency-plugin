@@ -21,8 +21,8 @@ package org.apache.maven.plugins.dependency.utils.filters;
 import java.io.File;
 import java.io.IOException;
 
-import org.apache.maven.artifact.Artifact;
 import org.apache.maven.plugins.dependency.testUtils.DependencyArtifactStubFactory;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
 import org.apache.maven.plugins.dependency.utils.markers.SourcesFileMarkerHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -51,7 +51,7 @@ class TestResolveMarkerFileFilter {
     void resolveFile() throws Exception {
         SourcesFileMarkerHandler handler = new SourcesFileMarkerHandler(outputFolder);
 
-        Artifact artifact = fact.getReleaseArtifact();
+        ResolvedDependency artifact = fact.getReleaseArtifact();
         handler.setArtifact(artifact);
 
         ResolveFileFilter filter = new ResolveFileFilter(handler);

@@ -25,9 +25,9 @@ import java.nio.file.PathMatcher;
 import java.util.Objects;
 import java.util.function.Predicate;
 
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.Exclusion;
-import org.apache.maven.model.InputLocation;
+import org.apache.maven.api.model.Dependency;
+import org.apache.maven.api.model.Exclusion;
+import org.apache.maven.api.model.InputLocation;
 
 /**
  * Simple "record" to hold the coordinates of the dependency which is excluded.

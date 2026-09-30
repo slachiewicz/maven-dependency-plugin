@@ -21,10 +21,9 @@ package org.apache.maven.plugins.dependency.analyze;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
-import org.apache.maven.plugin.logging.Log;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.junit.jupiter.api.Test;
 import org.mockito.ArgumentCaptor;
 
@@ -35,13 +34,13 @@ import static org.mockito.Mockito.verify;
 
 class ArtifactPatternMatcherTest {
 
-    private static Artifact artifact(String groupId, String artifactId, String version, String scope) {
-        return new DefaultArtifact(groupId, artifactId, version, scope, "jar", null, new DefaultArtifactHandler("jar"));
+    private static Dependency artifact(String groupId, String artifactId, String version, String scope) {
+        return DependencyStubs.dependency(groupId, artifactId, version, scope, "jar", null);
     }
 
-    private final Artifact compileDep = artifact("org.acme", "lib", "1.0", Artifact.SCOPE_COMPILE);
+    private final Dependency compileDep = artifact("org.acme", "lib", "1.0", "compile");
 
-    private final Artifact runtimeDep = artifact("org.acme", "lib", "1.0", Artifact.SCOPE_RUNTIME);
+    private final Dependency runtimeDep = artifact("org.acme", "lib", "1.0", "runtime");
 
     @Test
     void fourSegmentPatternIgnoresScope() {
@@ -77,15 +76,16 @@ class ArtifactPatternMatcherTest {
 
     @Test
     void removeMatchingReturnsOnlyRemovedArtifacts() {
-        // Artifact equality ignores the scope, so the runtime artifact needs its own coordinates
-        Artifact runtimeLib = artifact("org.acme", "runtime-lib", "1.0", Artifact.SCOPE_RUNTIME);
-        Artifact other = artifact("org.other", "x", "2.0", Artifact.SCOPE_RUNTIME);
-        Set<Artifact> artifacts = new LinkedHashSet<>();
+        // Dependency equality ignores the scope, so the runtime artifact needs its own coordinates
+        Dependency runtimeLib = artifact("org.acme", "runtime-lib", "1.0", "runtime");
+        Dependency other = artifact("org.other", "x", "2.0", "runtime");
+        Set<Dependency> artifacts = new LinkedHashSet<>();
         artifacts.add(compileDep);
         artifacts.add(runtimeLib);
         artifacts.add(other);
 
-        Set<Artifact> removed = ArtifactPatternMatcher.removeMatching(artifacts, new String[] {"org.acme:::*:runtime"});
+        Set<Dependency> removed =
+                ArtifactPatternMatcher.removeMatching(artifacts, new String[] {"org.acme:::*:runtime"});
 
         assertThat(removed).containsExactly(runtimeLib);
         assertThat(artifacts).containsExactly(compileDep, other);

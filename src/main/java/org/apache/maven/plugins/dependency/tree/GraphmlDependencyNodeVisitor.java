@@ -69,10 +69,10 @@ public class GraphmlDependencyNodeVisitor extends AbstractSerializingVisitor imp
             } else {
                 DependencyNode p = node.getParent();
                 writer.write("<edge source=\"" + generateId(p) + "\" target=\"" + generateId(node) + "\">");
-                if (node.getArtifact().getScope() != null) {
+                if (node.getDependency() != null) {
                     // add Edge label
                     writer.write("<data key=\"d1\"><y:PolyLineEdge><y:EdgeLabel>"
-                            + node.getArtifact().getScope() + "</y:EdgeLabel></y:PolyLineEdge></data>");
+                            + node.getDependency().getScope().id() + "</y:EdgeLabel></y:PolyLineEdge></data>");
                 }
                 writer.write("</edge>" + System.lineSeparator());
             }

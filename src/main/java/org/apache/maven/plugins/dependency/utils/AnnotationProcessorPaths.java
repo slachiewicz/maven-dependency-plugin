@@ -30,12 +30,12 @@ import java.util.Set;
 import java.util.TreeSet;
 import java.util.function.Consumer;
 
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.DependencyManagement;
-import org.apache.maven.model.Exclusion;
-import org.apache.maven.model.Plugin;
-import org.apache.maven.model.PluginExecution;
-import org.codehaus.plexus.util.xml.Xpp3Dom;
+import org.apache.maven.api.model.Dependency;
+import org.apache.maven.api.model.DependencyManagement;
+import org.apache.maven.api.model.Exclusion;
+import org.apache.maven.api.model.Plugin;
+import org.apache.maven.api.model.PluginExecution;
+import org.apache.maven.api.xml.XmlNode;
 
 /**
  * Reads the {@code annotationProcessorPaths} of the {@code maven-compiler-plugin} from the configuration of build
@@ -125,7 +125,7 @@ public final class AnnotationProcessorPaths {
                     || !COMPILER_PLUGIN_ARTIFACT_ID.equals(plugin.getArtifactId())) {
                 continue;
             }
-            Object pluginConfiguration = plugin.getConfiguration();
+            XmlNode pluginConfiguration = plugin.getConfiguration();
             addGroup(result, pluginConfiguration, pluginConfiguration, dependencyManagement, warn);
             for (PluginExecution execution : plugin.getExecutions()) {
                 addGroup(result, execution.getConfiguration(), pluginConfiguration, dependencyManagement, warn);
@@ -136,19 +136,19 @@ public final class AnnotationProcessorPaths {
 
     private static void addGroup(
             Set<Group> result,
-            Object configuration,
-            Object pluginConfiguration,
+            XmlNode configuration,
+            XmlNode pluginConfiguration,
             DependencyManagement dependencyManagement,
             Consumer<String> warn) {
-        if (!(configuration instanceof Xpp3Dom)) {
+        if (configuration == null) {
             return;
         }
-        Xpp3Dom paths = ((Xpp3Dom) configuration).getChild(PARAMETER);
+        XmlNode paths = configuration.getChild(PARAMETER);
         if (paths == null) {
             return;
         }
         Map<String, Dependency> dependencies = new LinkedHashMap<>();
-        for (Xpp3Dom path : paths.getChildren()) {
+        for (XmlNode path : paths.children()) {
             Dependency dependency = parse(path, dependencyManagement, warn);
             if (dependency != null) {
                 dependencies.putIfAbsent(key(dependency), dependency);
@@ -158,48 +158,58 @@ public final class AnnotationProcessorPaths {
             return;
         }
         // an execution that does not set the flag inherits the one of the plugin configuration
-        String flag = value((Xpp3Dom) configuration, USE_DEP_MGMT_PARAMETER);
-        if (flag == null && pluginConfiguration instanceof Xpp3Dom) {
-            flag = value((Xpp3Dom) pluginConfiguration, USE_DEP_MGMT_PARAMETER);
+        String flag = value(configuration, USE_DEP_MGMT_PARAMETER);
+        if (flag == null && pluginConfiguration != null) {
+            flag = value(pluginConfiguration, USE_DEP_MGMT_PARAMETER);
         }
         result.add(new Group(new ArrayList<>(dependencies.values()), Boolean.parseBoolean(flag)));
     }
 
-    private static Dependency parse(Xpp3Dom path, DependencyManagement dependencyManagement, Consumer<String> warn) {
-        Dependency dependency = new Dependency();
-        dependency.setGroupId(value(path, "groupId"));
-        dependency.setArtifactId(value(path, "artifactId"));
-        dependency.setVersion(value(path, "version"));
+    private static Dependency parse(XmlNode path, DependencyManagement dependencyManagement, Consumer<String> warn) {
+        String groupId = value(path, "groupId");
+        String artifactId = value(path, "artifactId");
         String type = value(path, "type");
-        dependency.setType(type == null ? "jar" : type);
-        dependency.setClassifier(value(path, "classifier"));
-        dependency.setScope("compile");
+        Dependency.Builder builder = Dependency.newBuilder()
+                .groupId(groupId)
+                .artifactId(artifactId)
+                .version(value(path, "version"))
+                .type(type == null ? "jar" : type)
+                .classifier(value(path, "classifier"))
+                .scope("compile");
+        Dependency dependency = builder.build();
 
-        if (dependency.getGroupId() == null || dependency.getArtifactId() == null) {
+        if (groupId == null || artifactId == null) {
             warn.accept("Skipping annotation processor path without groupId or artifactId: " + path);
             return null;
         }
         if (dependency.getVersion() == null) {
-            dependency.setVersion(managedVersion(dependency, dependencyManagement));
-            if (dependency.getVersion() == null) {
-                warn.accept("Skipping annotation processor path " + dependency.getGroupId() + ":"
-                        + dependency.getArtifactId()
+            String managedVersion = managedVersion(dependency, dependencyManagement);
+            if (managedVersion == null) {
+                warn.accept("Skipping annotation processor path " + groupId + ":" + artifactId
                         + ": it has no version and none is managed in dependencyManagement; compilation will fail");
                 return null;
             }
+            builder.version(managedVersion);
         }
-        Xpp3Dom exclusions = path.getChild("exclusions");
+        XmlNode exclusions = path.getChild("exclusions");
         if (exclusions != null) {
-            for (Xpp3Dom exclusionNode : exclusions.getChildren("exclusion")) {
-                Exclusion exclusion = new Exclusion();
-                exclusion.setGroupId(value(exclusionNode, "groupId"));
-                exclusion.setArtifactId(value(exclusionNode, "artifactId"));
-                if (exclusion.getGroupId() != null && exclusion.getArtifactId() != null) {
-                    dependency.addExclusion(exclusion);
+            List<Exclusion> parsed = new ArrayList<>();
+            for (XmlNode exclusionNode : exclusions.children()) {
+                if (!"exclusion".equals(exclusionNode.name())) {
+                    continue;
+                }
+                String exclusionGroupId = value(exclusionNode, "groupId");
+                String exclusionArtifactId = value(exclusionNode, "artifactId");
+                if (exclusionGroupId != null && exclusionArtifactId != null) {
+                    parsed.add(Exclusion.newBuilder()
+                            .groupId(exclusionGroupId)
+                            .artifactId(exclusionArtifactId)
+                            .build());
                 }
             }
+            builder.exclusions(parsed);
         }
-        return dependency;
+        return builder.build();
     }
 
     private static String managedVersion(Dependency dependency, DependencyManagement dependencyManagement) {
@@ -217,11 +227,11 @@ public final class AnnotationProcessorPaths {
         return null;
     }
 
-    private static String value(Xpp3Dom node, String name) {
-        Xpp3Dom child = node.getChild(name);
+    private static String value(XmlNode node, String name) {
+        XmlNode child = node.getChild(name);
         return child == null
                 ? null
-                : emptyToNull(child.getValue() == null ? null : child.getValue().trim());
+                : emptyToNull(child.value() == null ? null : child.value().trim());
     }
 
     private static String emptyToNull(String value) {

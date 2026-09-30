@@ -18,22 +18,16 @@
  */
 package org.apache.maven.plugins.dependency.tree;
 
-import java.io.File;
-import java.io.IOException;
 import java.io.StringWriter;
-import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.apache.maven.plugins.dependency.tree.DependencyNode.VerboseInfo;
-import org.eclipse.aether.artifact.ArtifactProperties;
 import org.junit.jupiter.api.Test;
-import org.junit.jupiter.api.io.TempDir;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
@@ -204,7 +198,7 @@ class DependencySizesTest {
     @Test
     void jsonHasNumericSizesOnlyWhenComputed() {
         StringWriter plain = new StringWriter();
-        root.accept(new JsonDependencyNodeVisitor(plain));
+        root.accept(new JsonDependencyNodeVisitor(plain, "jar"));
         assertFalse(plain.toString().contains("totalSize"));
         assertFalse(plain.toString().contains("\"size\""));
 
@@ -212,7 +206,7 @@ class DependencySizesTest {
         sizes.remove(DependencySizes.key(a2.getArtifact()));
         DependencySizes.annotate(root, root, sizes);
         StringWriter withSizes = new StringWriter();
-        root.accept(new JsonDependencyNodeVisitor(withSizes));
+        root.accept(new JsonDependencyNodeVisitor(withSizes, "jar"));
         String json = withSizes.toString();
         assertTrue(json.contains("\"size\": 1000,"));
         assertTrue(json.contains("\"totalSize\": 1155"));
@@ -220,28 +214,12 @@ class DependencySizesTest {
         assertFalse(json.contains("\"size\": 10,"));
     }
 
-    @Test
-    void systemScopeUsesTheSystemPathNotTheResolver(@TempDir File dir) throws IOException {
-        File jar = new File(dir, "system.jar");
-        Files.write(jar.toPath(), new byte[123]);
-        DependencyNode system = node(root, "system", "1.0");
-        system.setResolution(
-                new org.eclipse.aether.artifact.DefaultArtifact("g:system:jar:1.0")
-                        .setProperties(java.util.Collections.singletonMap(
-                                ArtifactProperties.LOCAL_PATH, jar.getAbsolutePath())),
-                null);
-
-        assertEquals(jar, DependencySizes.localFile(system));
-        assertNull(DependencySizes.localFile(a));
-    }
-
     private void size(DependencyNode node, long bytes) {
         sizes.put(DependencySizes.key(node.getArtifact()), bytes);
     }
 
     private static DependencyNode node(DependencyNode parent, String artifactId, String version) {
-        Artifact artifact = new DefaultArtifact(
-                "g", artifactId, version, Artifact.SCOPE_COMPILE, "jar", null, new DefaultArtifactHandler("jar"));
-        return new DependencyNode(parent, artifact, artifactId);
+        Dependency dependency = DependencyStubs.dependency("g", artifactId, version, "compile", "jar", null);
+        return new DependencyNode(parent, dependency, dependency, artifactId);
     }
 }

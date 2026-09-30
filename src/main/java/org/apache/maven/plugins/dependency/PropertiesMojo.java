@@ -18,24 +18,26 @@
  */
 package org.apache.maven.plugins.dependency;
 
-import javax.inject.Inject;
-
-import java.io.File;
+import java.nio.file.Path;
 import java.util.List;
-import java.util.Set;
+import java.util.Map;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedArtifact;
+import org.apache.maven.api.PathScope;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.DependencyResolver;
+import org.apache.maven.api.services.ProjectManager;
+import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.apache.maven.plugins.dependency.utils.ParamArtifact;
 import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.apache.maven.project.MavenProject;
-import org.eclipse.aether.resolution.ArtifactDescriptorException;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
 
 /**
  * Goal that sets a property pointing to the artifact file for each project dependency. For each dependency (direct and
@@ -46,33 +48,22 @@ import org.eclipse.aether.resolution.ArtifactResolutionException;
  * @author Paul Gier
  * @since 2.2
  */
-@Mojo(
-        name = "properties",
-        requiresDependencyResolution = ResolutionScope.TEST,
-        defaultPhase = LifecyclePhase.INITIALIZE,
-        threadSafe = true)
-public class PropertiesMojo extends AbstractMojo {
-
+@Mojo(name = "properties", defaultPhase = "initialize")
+public class PropertiesMojo implements org.apache.maven.api.plugin.Mojo {
     private static final String VERSION_SUFFIX = ".version";
 
-    /**
-     * The current Maven project.
-     */
-    private final MavenProject project;
-
-    private final ResolverUtil resolverUtil;
+    @Inject
+    private Project project;
 
     @Inject
-    public PropertiesMojo(MavenProject project, ResolverUtil resolverUtil) {
-        this.project = project;
-        this.resolverUtil = resolverUtil;
-    }
+    private Session session;
 
-    /**
-     * Skip plugin execution completely.
-     *
-     * @since 2.7
-     */
+    @Inject
+    private Log log;
+
+    @Inject
+    private DependencyResolver dependencyResolver;
+
     @Parameter(property = "mdep.skip", defaultValue = "false")
     private boolean skip;
 
@@ -114,69 +105,77 @@ public class PropertiesMojo extends AbstractMojo {
     /**
      * Main entry into mojo. Gets the list of dependencies and iterates through setting a property for each artifact.
      * Gets the list of declared plugin's extra artifacts and iterates through setting a property for each artifact.
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      */
     @Override
-    public void execute() throws MojoExecutionException {
+    public void execute() throws MojoException {
         if (isSkip()) {
-            getLog().info("Skipping plugin execution");
+            log.info("Skipping plugin execution");
             return;
         }
 
-        Set<Artifact> artifacts = project.getArtifacts();
+        ProjectManager projectManager = session.getService(ProjectManager.class);
+        Map<Dependency, Path> artifacts = dependencyResolver
+                .resolve(session, project, PathScope.TEST_RUNTIME)
+                .getDependencies();
 
-        for (Artifact artifact : artifacts) {
-            String conflictId = artifact.getDependencyConflictId();
-            File file = artifact.getFile();
+        for (Map.Entry<Dependency, Path> artifact : artifacts.entrySet()) {
+            String conflictId = DependencyUtil.getDependencyConflictId(artifact.getKey());
+            Path file = artifact.getValue();
             if (file != null) {
-                project.getProperties().setProperty(conflictId, file.getAbsolutePath());
+                projectManager.setProperty(
+                        project, conflictId, file.toAbsolutePath().toString());
             } else {
-                getLog().warn("Artifact " + conflictId + " has no associated file; no property will be set for it.");
+                log.warn("Artifact " + conflictId + " has no associated file; no property will be set for it.");
             }
             if (includeVersions) {
-                project.getProperties().setProperty(conflictId + VERSION_SUFFIX, artifact.getBaseVersion());
+                projectManager.setProperty(
+                        project,
+                        conflictId + VERSION_SUFFIX,
+                        artifact.getKey().getBaseVersion().toString());
             }
         }
 
         if (extraArtifacts != null) {
+            ResolverUtil resolverUtil = new ResolverUtil(session, project);
             try {
                 for (ParamArtifact paramArtifact : extraArtifacts) {
+
                     if (!paramArtifact.isDataSet()) {
-                        throw new MojoExecutionException("You must specify an artifact OR GAV separately");
+                        throw new MojoException("You must specify an artifact OR GAV separately");
                     }
 
-                    org.eclipse.aether.artifact.Artifact artifact =
-                            resolverUtil.createArtifactFromParams(paramArtifact);
-                    artifact = resolverUtil.resolveArtifact(artifact, project.getRemoteProjectRepositories());
+                    Artifact artifact = resolverUtil.createArtifactFromParams(paramArtifact);
+                    DownloadedArtifact resolved =
+                            resolverUtil.resolveArtifact(artifact, resolverUtil.getProjectRepositories());
 
-                    String conflictId = toConflictId(artifact);
-                    File file = artifact.getFile();
+                    String conflictId = toConflictId(resolved);
+                    Path file = resolved.getPath();
                     if (file != null) {
-                        this.project.getProperties().setProperty(conflictId, file.getAbsolutePath());
+                        projectManager.setProperty(
+                                project, conflictId, file.toAbsolutePath().toString());
                     } else {
-                        getLog().warn("Extra artifact " + conflictId
+                        log.warn("Extra artifact " + conflictId
                                 + " has no associated file; no property will be set for it.");
                     }
                     if (includeVersions) {
-                        this.project
-                                .getProperties()
-                                .setProperty(conflictId + VERSION_SUFFIX, artifact.getBaseVersion());
+                        projectManager.setProperty(
+                                project,
+                                conflictId + VERSION_SUFFIX,
+                                resolved.getBaseVersion().toString());
                     }
                 }
-            } catch (ArtifactResolutionException | ArtifactDescriptorException e) {
-                throw new MojoExecutionException("Couldn't download artifact: " + e.getMessage(), e);
+            } catch (RuntimeException e) {
+                throw new MojoException("Couldn't download artifact: " + e.getMessage(), e);
             }
         }
     }
 
-    /**
-     * @return {@link #skip}
-     */
     public boolean isSkip() {
         return skip;
     }
 
-    private String toConflictId(org.eclipse.aether.artifact.Artifact artifact) {
+    private String toConflictId(Artifact artifact) {
         // The conflict ID is the same as the one used by Maven's Artifact class, which is
         // groupId:artifactId:type[:classifier]
         StringBuilder sb = new StringBuilder();

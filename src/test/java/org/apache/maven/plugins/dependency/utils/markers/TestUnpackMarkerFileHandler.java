@@ -22,11 +22,11 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.plugins.dependency.fromConfiguration.ArtifactItem;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.apache.maven.plugins.dependency.testUtils.stubs.StubUnpackFileMarkerHandler;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -45,18 +45,18 @@ class TestUnpackMarkerFileHandler {
 
     @BeforeEach
     void setUp() {
-        ArtifactItem artifactItem = new ArtifactItem(new DefaultArtifact("test", "test", "1", null, "jar", "", null));
+        ArtifactItem artifactItem = new ArtifactItem(resolved("test", "test", "1"));
         artifactItems.add(artifactItem);
 
-        artifactItem = new ArtifactItem(new DefaultArtifact("test2", "test2", "2", null, "jar", "", null));
+        artifactItem = new ArtifactItem(resolved("test2", "test2", "2"));
         artifactItem.setIncludes("**/*.xml");
         artifactItems.add(artifactItem);
 
-        artifactItem = new ArtifactItem(new DefaultArtifact("test3", "test3", "3", null, "jar", "", null));
+        artifactItem = new ArtifactItem(resolved("test3", "test3", "3"));
         artifactItem.setExcludes("**/*.class");
         artifactItems.add(artifactItem);
 
-        artifactItem = new ArtifactItem(new DefaultArtifact("test4", "test4", "4", null, "jar", "", null));
+        artifactItem = new ArtifactItem(resolved("test4", "test4", "4"));
         artifactItem.setIncludes("**/*.xml");
         artifactItem.setExcludes("**/*.class");
         artifactItems.add(artifactItem);
@@ -65,7 +65,7 @@ class TestUnpackMarkerFileHandler {
     /**
      * Assert that default functionality still exists
      *
-     * @throws MojoExecutionException in case of an error.
+     * @throws MojoException in case of an error.
      */
     @Test
     void setMarker() throws Exception {
@@ -114,8 +114,8 @@ class TestUnpackMarkerFileHandler {
         File theFile = new File(outputFolder, "theFile.jar");
         theFile.createNewFile();
         ArtifactItem theArtifactItem = artifactItems.get(0);
-        Artifact theArtifact = theArtifactItem.getArtifact();
-        theArtifact.setFile(theFile);
+        ResolvedDependency theArtifact = ResolvedDependency.of(null, theArtifactItem.getArtifact(), theFile.toPath());
+        theArtifactItem.setArtifact(theArtifact);
         UnpackFileMarkerHandler handler = new UnpackFileMarkerHandler(theArtifactItem, this.outputFolder);
         assertFalse(handler.isMarkerSet());
         // if the marker is not set, assume it is infinitely older than the
@@ -139,7 +139,7 @@ class TestUnpackMarkerFileHandler {
         try {
             handler.setMarker();
             fail("Expected an Exception here");
-        } catch (MojoExecutionException e) {
+        } catch (MojoException e) {
 
         }
     }
@@ -238,5 +238,10 @@ class TestUnpackMarkerFileHandler {
 
         handler.clearMarker();
         assertFalse(handle.exists());
+    }
+
+    private static ResolvedDependency resolved(String groupId, String artifactId, String version) {
+        return ResolvedDependency.of(
+                null, DependencyStubs.dependency(groupId, artifactId, version, "compile", "jar", ""), null);
     }
 }

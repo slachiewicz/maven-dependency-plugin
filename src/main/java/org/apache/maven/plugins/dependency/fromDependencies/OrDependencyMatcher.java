@@ -21,7 +21,7 @@ package org.apache.maven.plugins.dependency.fromDependencies;
 import java.util.ArrayList;
 import java.util.Collection;
 
-import org.apache.maven.model.Dependency;
+import org.apache.maven.api.DependencyCoordinates;
 
 class OrDependencyMatcher implements DependencyMatcher {
 
@@ -39,7 +39,7 @@ class OrDependencyMatcher implements DependencyMatcher {
     }
 
     @Override
-    public boolean matches(Dependency dependency) {
+    public boolean matches(DependencyCoordinates dependency) {
         for (DependencyMatcher matcher : matchers) {
             if (matcher.matches(dependency)) {
                 return true;

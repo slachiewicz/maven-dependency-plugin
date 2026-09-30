@@ -28,8 +28,8 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.eclipse.aether.artifact.ArtifactProperties;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.DownloadedArtifact;
 
 /**
  * Computes and formats the sizes shown by <code>dependency:tree -DshowSizes</code>.
@@ -177,8 +177,7 @@ final class DependencySizes {
     }
 
     private static String winnerKey(DependencyNode omitted) {
-        Artifact artifact = omitted.getArtifact();
-        return artifact.getDependencyConflictId() + ":"
+        return conflictId(omitted.getArtifact()) + ":"
                 + omitted.getVerboseInfo().getWinnerVersion();
     }
 
@@ -190,28 +189,26 @@ final class DependencySizes {
      * @return the identity of an artifact for the purpose of counting it once
      */
     static String key(Artifact artifact) {
-        return artifact.getDependencyConflictId() + ":" + artifact.getVersion();
+        return conflictId(artifact) + ":" + artifact.getVersion();
     }
 
     /**
-     * The file of a node that is known without resolving it: the file of the artifact, or the <code>systemPath</code>
-     * of a dependency of scope <code>system</code>.
+     * The file of a node that is known without resolving it: the file of the artifact when it is already resolved.
      *
      * @return the file, or <code>null</code> if the artifact has to be resolved
      */
     static File localFile(DependencyNode node) {
-        if (node.getArtifact().getFile() != null) {
-            return node.getArtifact().getFile();
+        Artifact artifact = node.getArtifact();
+        if (artifact instanceof DownloadedArtifact && ((DownloadedArtifact) artifact).getPath() != null) {
+            return ((DownloadedArtifact) artifact).getPath().toFile();
         }
-        org.eclipse.aether.artifact.Artifact resolverArtifact = node.getResolverArtifact();
-        if (resolverArtifact == null) {
-            return null;
-        }
-        if (resolverArtifact.getFile() != null) {
-            return resolverArtifact.getFile();
-        }
-        String localPath = resolverArtifact.getProperty(ArtifactProperties.LOCAL_PATH, null);
-        return localPath != null ? new File(localPath) : null;
+        return null;
+    }
+
+    private static String conflictId(Artifact artifact) {
+        String classifier = artifact.getClassifier();
+        return artifact.getGroupId() + ":" + artifact.getArtifactId() + ":" + artifact.getExtension()
+                + (classifier == null || classifier.isEmpty() ? "" : ":" + classifier);
     }
 
     /**

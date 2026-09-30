@@ -23,11 +23,11 @@ import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.DependencyManagement;
-import org.apache.maven.model.Plugin;
-import org.apache.maven.model.PluginExecution;
-import org.codehaus.plexus.util.xml.Xpp3DomBuilder;
+import org.apache.maven.api.model.Dependency;
+import org.apache.maven.api.model.DependencyManagement;
+import org.apache.maven.api.model.Plugin;
+import org.apache.maven.api.model.PluginExecution;
+import org.apache.maven.api.xml.XmlNode;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -39,20 +39,39 @@ class AnnotationProcessorPathsTest {
     private final List<String> warnings = new ArrayList<>();
 
     private static Plugin compiler(String pluginConfig, String... executionConfigs) throws Exception {
-        Plugin plugin = new Plugin();
-        plugin.setGroupId("org.apache.maven.plugins");
-        plugin.setArtifactId("maven-compiler-plugin");
+        Plugin.Builder plugin =
+                Plugin.newBuilder().groupId("org.apache.maven.plugins").artifactId("maven-compiler-plugin");
         if (pluginConfig != null) {
-            plugin.setConfiguration(Xpp3DomBuilder.build(new StringReader(pluginConfig)));
+            plugin.configuration(parse(pluginConfig));
         }
+        List<PluginExecution> executions = new ArrayList<>();
         int i = 0;
         for (String config : executionConfigs) {
-            PluginExecution execution = new PluginExecution();
-            execution.setId("e" + i++);
-            execution.setConfiguration(Xpp3DomBuilder.build(new StringReader(config)));
-            plugin.addExecution(execution);
+            executions.add(PluginExecution.newBuilder()
+                    .id("e" + i++)
+                    .configuration(parse(config))
+                    .build());
         }
-        return plugin;
+        return plugin.executions(executions).build();
+    }
+
+    private static XmlNode parse(String xml) throws Exception {
+        org.w3c.dom.Document document = javax.xml.parsers.DocumentBuilderFactory.newInstance()
+                .newDocumentBuilder()
+                .parse(new org.xml.sax.InputSource(new StringReader(xml)));
+        return convert(document.getDocumentElement());
+    }
+
+    private static XmlNode convert(org.w3c.dom.Element element) {
+        List<XmlNode> children = new ArrayList<>();
+        for (org.w3c.dom.Node child = element.getFirstChild(); child != null; child = child.getNextSibling()) {
+            if (child instanceof org.w3c.dom.Element) {
+                children.add(convert((org.w3c.dom.Element) child));
+            }
+        }
+        return children.isEmpty()
+                ? XmlNode.newInstance(element.getTagName(), element.getTextContent())
+                : XmlNode.newInstance(element.getTagName(), children);
     }
 
     private static String paths(String... paths) {
@@ -155,12 +174,13 @@ class AnnotationProcessorPathsTest {
 
     @Test
     void takesMissingVersionFromDependencyManagement() throws Exception {
-        DependencyManagement management = new DependencyManagement();
-        Dependency managed = new Dependency();
-        managed.setGroupId("g");
-        managed.setArtifactId("a");
-        managed.setVersion("4.2");
-        management.addDependency(managed);
+        DependencyManagement management = DependencyManagement.newBuilder()
+                .dependencies(Collections.singletonList(Dependency.newBuilder()
+                        .groupId("g")
+                        .artifactId("a")
+                        .version("4.2")
+                        .build()))
+                .build();
 
         List<Dependency> result = collect(management, compiler(null, paths(path("g", "a", null))));
 
@@ -171,13 +191,14 @@ class AnnotationProcessorPathsTest {
 
     @Test
     void skipsMissingVersionWithoutManagedVersion() throws Exception {
-        DependencyManagement management = new DependencyManagement();
-        Dependency managed = new Dependency();
-        managed.setGroupId("g");
-        managed.setArtifactId("a");
-        managed.setClassifier("other");
-        managed.setVersion("4.2");
-        management.addDependency(managed);
+        DependencyManagement management = DependencyManagement.newBuilder()
+                .dependencies(Collections.singletonList(Dependency.newBuilder()
+                        .groupId("g")
+                        .artifactId("a")
+                        .classifier("other")
+                        .version("4.2")
+                        .build()))
+                .build();
 
         List<Dependency> result = collect(management, compiler(paths(path("g", "a", null), path("g", "b", "1"))));
 
@@ -203,8 +224,9 @@ class AnnotationProcessorPathsTest {
 
     @Test
     void ignoresOtherPluginsAndMissingConfiguration() throws Exception {
-        Plugin other = compiler(paths(path("g", "a", "1.0")));
-        other.setArtifactId("maven-surefire-plugin");
+        Plugin other = Plugin.newBuilder(compiler(paths(path("g", "a", "1.0"))))
+                .artifactId("maven-surefire-plugin")
+                .build();
 
         assertTrue(collect(null).isEmpty());
         assertTrue(collect(null, other).isEmpty());

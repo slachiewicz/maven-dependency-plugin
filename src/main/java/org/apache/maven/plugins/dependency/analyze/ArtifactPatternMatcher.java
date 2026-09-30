@@ -24,12 +24,12 @@ import java.util.Iterator;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.logging.Log;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.plugin.Log;
 import org.apache.maven.shared.artifact.filter.StrictPatternExcludesArtifactFilter;
 
 /**
- * Matches artifacts against ignore patterns of the form
+ * Matches dependencies against ignore patterns of the form
  * <code>[groupId]:[artifactId]:[type]:[version]:[scope]</code>.
  * <p>
  * The first four segments are matched by {@link StrictPatternExcludesArtifactFilter}, which silently never matches a
@@ -41,19 +41,19 @@ final class ArtifactPatternMatcher {
     private ArtifactPatternMatcher() {}
 
     /**
-     * Removes artifacts matching any of the given patterns from the source set and returns the removed artifacts.
+     * Removes dependencies matching any of the given patterns from the source set and returns the removed ones.
      *
-     * @param artifacts the source set of artifacts (mutated in place)
+     * @param artifacts the source set of dependencies (mutated in place)
      * @param patterns  patterns, may be null or empty
-     * @return the artifacts that were removed from the source set
+     * @return the dependencies that were removed from the source set
      */
-    static Set<Artifact> removeMatching(Set<Artifact> artifacts, String[] patterns) {
+    static Set<Dependency> removeMatching(Set<Dependency> artifacts, String[] patterns) {
         if (patterns == null || patterns.length == 0) {
             return Collections.emptySet();
         }
-        Set<Artifact> result = new LinkedHashSet<>();
-        for (Iterator<Artifact> it = artifacts.iterator(); it.hasNext(); ) {
-            Artifact artifact = it.next();
+        Set<Dependency> result = new LinkedHashSet<>();
+        for (Iterator<Dependency> it = artifacts.iterator(); it.hasNext(); ) {
+            Dependency artifact = it.next();
             if (matchesAny(artifact, patterns)) {
                 it.remove();
                 result.add(artifact);
@@ -63,11 +63,11 @@ final class ArtifactPatternMatcher {
     }
 
     /**
-     * @param artifact the artifact to test
+     * @param artifact the dependency to test
      * @param patterns patterns, may be null or empty
-     * @return true if the artifact matches at least one pattern
+     * @return true if the dependency matches at least one pattern
      */
-    static boolean matchesAny(Artifact artifact, String[] patterns) {
+    static boolean matchesAny(Dependency artifact, String[] patterns) {
         if (patterns == null) {
             return false;
         }
@@ -97,17 +97,18 @@ final class ArtifactPatternMatcher {
         }
     }
 
-    private static boolean matches(Artifact artifact, String pattern) {
+    private static boolean matches(Dependency artifact, String pattern) {
         String[] segments = pattern.split(":");
         if (segments.length <= 4) {
-            return !new StrictPatternExcludesArtifactFilter(Collections.singletonList(pattern)).include(artifact);
+            return !new StrictPatternExcludesArtifactFilter(Collections.singletonList(pattern)).test(artifact);
         }
         if (segments.length > 5) {
             return false;
         }
         String coordinates = String.join(":", Arrays.copyOf(segments, 4));
-        return !new StrictPatternExcludesArtifactFilter(Collections.singletonList(coordinates)).include(artifact)
-                && matchesSegment(artifact.getScope(), segments[4]);
+        String scope = artifact.getScope() == null ? null : artifact.getScope().id();
+        return !new StrictPatternExcludesArtifactFilter(Collections.singletonList(coordinates)).test(artifact)
+                && matchesSegment(scope, segments[4]);
     }
 
     private static boolean matchesSegment(String value, String pattern) {

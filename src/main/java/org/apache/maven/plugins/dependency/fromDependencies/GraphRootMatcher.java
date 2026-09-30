@@ -20,7 +20,7 @@ package org.apache.maven.plugins.dependency.fromDependencies;
 
 import java.util.Objects;
 
-import org.apache.maven.model.Dependency;
+import org.apache.maven.api.DependencyCoordinates;
 
 class GraphRootMatcher implements DependencyMatcher {
 
@@ -31,7 +31,7 @@ class GraphRootMatcher implements DependencyMatcher {
     }
 
     @Override
-    public boolean matches(Dependency dependency) {
+    public boolean matches(DependencyCoordinates dependency) {
         return Objects.equals(graphRoot.getGroupId(), dependency.getGroupId())
                 && Objects.equals(graphRoot.getArtifactId(), dependency.getArtifactId());
     }

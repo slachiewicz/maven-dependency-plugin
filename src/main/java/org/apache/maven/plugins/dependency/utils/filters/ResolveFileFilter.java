@@ -18,7 +18,7 @@
  */
 package org.apache.maven.plugins.dependency.utils.filters;
 
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.plugin.MojoException;
 import org.apache.maven.plugins.dependency.fromConfiguration.ArtifactItem;
 import org.apache.maven.plugins.dependency.utils.markers.MarkerHandler;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactFilterException;
@@ -40,7 +40,7 @@ public class ResolveFileFilter extends MarkerFileFilter {
         handler.setArtifact(item.getArtifact());
         try {
             return (!handler.isMarkerSet());
-        } catch (MojoExecutionException e) {
+        } catch (MojoException e) {
             throw new ArtifactFilterException(e.getMessage(), e);
         }
     }

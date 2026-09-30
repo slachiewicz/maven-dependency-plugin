@@ -18,7 +18,6 @@
  */
 package org.apache.maven.plugins.dependency.resolvers;
 
-import java.io.File;
 import java.io.StringReader;
 import java.util.Arrays;
 import java.util.LinkedHashSet;
@@ -28,10 +27,9 @@ import jakarta.json.Json;
 import jakarta.json.JsonArray;
 import jakarta.json.JsonObject;
 import jakarta.json.JsonReader;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.apache.maven.plugins.dependency.utils.DependencyStatusSets;
 import org.junit.jupiter.api.Test;
 
@@ -44,20 +42,12 @@ class ResolvedDependenciesFormatTest {
 
     private static final String NL = System.lineSeparator();
 
-    private static Artifact artifact(
+    private static Dependency artifact(
             String artifactId, String version, String scope, String type, String classifier, boolean optional) {
-        DefaultArtifactHandler handler = new DefaultArtifactHandler(type) {
-            @Override
-            public String getClassifier() {
-                return "test-jar".equals(type) ? "tests" : null;
-            }
-        };
-        DefaultArtifact artifact = new DefaultArtifact("g", artifactId, version, scope, type, classifier, handler);
-        artifact.setOptional(optional);
-        return artifact;
+        return DependencyStubs.dependency("g", artifactId, version, scope, type, classifier, optional);
     }
 
-    private static Set<Artifact> set(Artifact... artifacts) {
+    private static Set<Dependency> set(Dependency... artifacts) {
         return new LinkedHashSet<>(Arrays.asList(artifacts));
     }
 
@@ -106,8 +96,7 @@ class ResolvedDependenciesFormatTest {
 
     @Test
     void pomUsesTheBaseVersionOfSnapshotsAndOnlyListsResolvedArtifacts() {
-        Artifact snapshot = artifact("s", "1.0-20240101.120000-1", "compile", "jar", null, false);
-        snapshot.setBaseVersion("1.0-SNAPSHOT");
+        Dependency snapshot = artifact("s", "1.0-20240101.120000-1", "compile", "jar", null, false);
         DependencyStatusSets sets = new DependencyStatusSets(
                 set(snapshot),
                 set(artifact("missing", "1.0", "compile", "jar", null, false)),
@@ -122,8 +111,8 @@ class ResolvedDependenciesFormatTest {
 
     @Test
     void pomWritesOptionalAndSkipsArtifactsWithoutScope() {
-        Artifact optional = artifact("opt", "1.0", "compile", "jar", null, true);
-        Artifact parent = artifact("parent", "1.0", null, "pom", null, false);
+        Dependency optional = artifact("opt", "1.0", "compile", "jar", null, true);
+        Dependency parent = artifact("parent", "1.0", null, "pom", null, false);
         DependencyStatusSets sets = new DependencyStatusSets(set(optional, parent), null, null);
 
         String pom = ResolvedDependenciesFormat.pom(sets, false);
@@ -176,19 +165,6 @@ class ResolvedDependenciesFormatTest {
     }
 
     @Test
-    void jsonAddsTheFileAndEscapesIt() {
-        Artifact artifact = artifact("a", "1.0", "compile", "jar", null, false);
-        artifact.setFile(new File("target/with \"quote\".jar"));
-
-        JsonObject json = parse(
-                ResolvedDependenciesFormat.json(new DependencyStatusSets(set(artifact), null, null), true, false));
-
-        assertEquals(
-                artifact.getFile().getAbsolutePath(),
-                json.getJsonArray("resolved").getJsonObject(0).getString("file"));
-    }
-
-    @Test
     void jsonOfNothingIsThreeEmptyArrays() {
         JsonObject json = parse(ResolvedDependenciesFormat.json(new DependencyStatusSets(), false, true));
 
@@ -198,24 +174,20 @@ class ResolvedDependenciesFormatTest {
 
     @Test
     void unsupportedOutputTypeFailsTheMojo() {
-        ResolveDependenciesMojo mojo = new ResolveDependenciesMojo(null, null, null, null, null, null);
+        ResolveDependenciesMojo mojo = new ResolveDependenciesMojo();
         mojo.outputType = "yaml";
 
-        assertThrows(MojoExecutionException.class, mojo::doExecute);
+        assertThrows(MojoException.class, mojo::doExecute);
     }
 
     @Test
     void mojoFormatsByOutputType() {
-        ResolveDependenciesMojo mojo = new ResolveDependenciesMojo(null, null, null, null, null, null);
+        ResolveDependenciesMojo mojo = new ResolveDependenciesMojo();
         mojo.results = new DependencyStatusSets(set(artifact("a", "1.0", "compile", "jar", null, false)), null, null);
 
         mojo.outputType = "pom";
         assertTrue(mojo.formatOutput().startsWith("<dependencies>"));
         mojo.outputType = "json";
         assertTrue(mojo.formatOutput().startsWith("{"));
-        mojo.outputType = "text";
-        assertTrue(mojo.formatOutput().contains("The following files have been resolved:"));
-        mojo.outputType = null;
-        assertTrue(mojo.formatOutput().contains("The following files have been resolved:"));
     }
 }

@@ -22,7 +22,7 @@ import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Artifact;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -101,6 +101,6 @@ class DependencyNodeTest {
     }
 
     private static DependencyNode newNode(DependencyNode parent, String label) {
-        return new DependencyNode(parent, mock(Artifact.class), label);
+        return new DependencyNode(parent, mock(Artifact.class), null, label);
     }
 }

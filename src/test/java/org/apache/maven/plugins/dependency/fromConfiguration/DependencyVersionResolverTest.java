@@ -23,18 +23,18 @@ import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.project.MavenProject;
-import org.eclipse.aether.DefaultRepositorySystemSession;
-import org.eclipse.aether.RepositorySystem;
-import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.collection.CollectRequest;
-import org.eclipse.aether.collection.CollectResult;
-import org.eclipse.aether.graph.DefaultDependencyNode;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.Node;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.Type;
+import org.apache.maven.api.Version;
+import org.apache.maven.api.services.DependencyResolver;
+import org.apache.maven.api.services.DependencyResolverRequest;
+import org.apache.maven.api.services.DependencyResolverResult;
+import org.apache.maven.plugins.dependency.fromConfiguration.DependencyVersionResolver.GroupArtifactKey;
+import org.apache.maven.plugins.dependency.fromConfiguration.DependencyVersionResolver.Variant;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -42,66 +42,33 @@ import static org.junit.jupiter.api.Assertions.assertIterableEquals;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 class DependencyVersionResolverTest {
     @Test
-    void resolvesTransitiveVariantsWithoutIncludingTheProjectAndCachesTheGraph() throws Exception {
-        MavenSession session = mock(MavenSession.class);
-        when(session.getRepositorySession()).thenReturn(new DefaultRepositorySystemSession());
-        RepositorySystem repositorySystem = mock(RepositorySystem.class);
-        MavenProject project = new MavenProject();
-        project.setArtifact(artifact("group", "artifact", "9.0", "test-jar", "tests"));
-
-        DefaultDependencyNode root = new DefaultDependencyNode(RepositoryUtils.toArtifact(project.getArtifact()));
-        DefaultDependencyNode direct =
-                new DefaultDependencyNode(RepositoryUtils.toArtifact(artifact("group", "direct", "1.0", "jar", null)));
-        direct.setChildren(Arrays.asList(
-                new DefaultDependencyNode(
-                        RepositoryUtils.toArtifact(artifact("group", "artifact", "1.0", "jar", null))),
-                new DefaultDependencyNode(
-                        RepositoryUtils.toArtifact(artifact("group", "artifact", "2.0", "test-jar", "tests")))));
-        root.setChildren(Collections.singletonList(direct));
-        when(repositorySystem.collectDependencies(any(RepositorySystemSession.class), any(CollectRequest.class)))
-                .thenAnswer(invocation -> new CollectResult(invocation.getArgument(1)).setRoot(root));
-
-        ArtifactItem item = new ArtifactItem();
-        item.setGroupId("group");
-        item.setArtifactId("artifact");
-        item.setType("test-jar");
-        item.setClassifier("tests");
-        item.setDependencyScope("runtime");
-        DependencyVersionResolver resolver = new DependencyVersionResolver(session, project, repositorySystem);
-
-        assertEquals("2.0", resolver.resolveVersion(item));
-        assertEquals("2.0", resolver.resolveVersion(item));
-        verify(repositorySystem).collectDependencies(any(RepositorySystemSession.class), any(CollectRequest.class));
-    }
-
-    @Test
     void indexesAllVariantsUnderTheirGroupAndArtifactId() {
-        Artifact main = artifact("group", "artifact", "1.0", "jar", null);
-        Artifact sources = artifact("group", "artifact", "2.0", "jar", "sources");
-        Artifact other = artifact("group", "other", "3.0", "jar", null);
+        Variant main = new Variant("group", "artifact", "1.0", "jar", null);
+        Variant sources = new Variant("group", "artifact", "2.0", "jar", "sources");
+        Variant other = new Variant("group", "other", "3.0", "jar", null);
 
-        Map<DependencyVersionResolver.GroupArtifactKey, List<Artifact>> index =
-                DependencyVersionResolver.indexArtifacts(Arrays.asList(main, sources, other));
+        Map<GroupArtifactKey, List<Variant>> index =
+                DependencyVersionResolver.indexVariants(Arrays.asList(main, sources, other));
 
-        assertEquals(Arrays.asList(main, sources), index.get(DependencyVersionResolver.GroupArtifactKey.from(main)));
-        assertEquals(Arrays.asList(other), index.get(DependencyVersionResolver.GroupArtifactKey.from(other)));
+        assertEquals(Arrays.asList(main, sources), index.get(new GroupArtifactKey("group", "artifact")));
+        assertEquals(Arrays.asList(other), index.get(new GroupArtifactKey("group", "other")));
         assertThrows(UnsupportedOperationException.class, () -> index.clear());
         assertThrows(
                 UnsupportedOperationException.class,
-                () -> index.get(DependencyVersionResolver.GroupArtifactKey.from(main))
-                        .clear());
+                () -> index.get(new GroupArtifactKey("group", "artifact")).clear());
     }
 
     @Test
     void matchesExactVariantBeforeUsingAllGaVariants() {
-        Artifact main = artifact("group", "artifact", "1.0", "jar", null);
-        Artifact sources = artifact("group", "artifact", "2.0", "jar", "sources");
-        List<Artifact> variants = Arrays.asList(main, sources);
+        List<Variant> variants = Arrays.asList(
+                new Variant("group", "artifact", "1.0", "jar", null),
+                new Variant("group", "artifact", "2.0", "jar", "sources"));
 
         ArtifactItem item = new ArtifactItem();
         item.setGroupId("group");
@@ -114,8 +81,52 @@ class DependencyVersionResolverTest {
                 Arrays.asList("1.0", "2.0"), DependencyVersionResolver.matchingVersions(item, variants, true));
     }
 
-    private Artifact artifact(String groupId, String artifactId, String version, String type, String classifier) {
-        return new DefaultArtifact(
-                groupId, artifactId, version, null, type, classifier, new DefaultArtifactHandler(type));
+    @Test
+    void resolvesTransitiveVariantsWithoutIncludingTheProjectAndCachesTheGraph() {
+        Session session = mock(Session.class);
+        DependencyResolver dependencyResolver = mock(DependencyResolver.class);
+        when(session.getService(DependencyResolver.class)).thenReturn(dependencyResolver);
+        Project project = mock(Project.class);
+
+        Node root = node("group", "artifact", "9.0", "test-jar", "tests");
+        Node direct = node("group", "direct", "1.0", "jar", null);
+        List<Node> children = Arrays.asList(
+                node("group", "artifact", "1.0", "jar", null), node("group", "artifact", "2.0", "test-jar", "tests"));
+        when(direct.getChildren()).thenReturn(children);
+        when(root.getChildren()).thenReturn(Collections.singletonList(direct));
+        DependencyResolverResult result = mock(DependencyResolverResult.class);
+        when(result.getRoot()).thenReturn(root);
+        when(dependencyResolver.collect(any(DependencyResolverRequest.class))).thenReturn(result);
+
+        ArtifactItem item = new ArtifactItem();
+        item.setGroupId("group");
+        item.setArtifactId("artifact");
+        item.setType("test-jar");
+        item.setClassifier("tests");
+        item.setDependencyScope("runtime");
+        DependencyVersionResolver resolver = new DependencyVersionResolver(project, () -> session);
+
+        assertEquals("2.0", resolver.resolveVersion(item));
+        assertEquals("2.0", resolver.resolveVersion(item));
+        verify(dependencyResolver, times(1)).collect(any(DependencyResolverRequest.class));
+    }
+
+    private Node node(String groupId, String artifactId, String version, String type, String classifier) {
+        Version v = mock(Version.class);
+        when(v.toString()).thenReturn(version);
+        Artifact artifact = mock(Artifact.class);
+        when(artifact.getGroupId()).thenReturn(groupId);
+        when(artifact.getArtifactId()).thenReturn(artifactId);
+        when(artifact.getVersion()).thenReturn(v);
+        when(artifact.getClassifier()).thenReturn(classifier == null ? "" : classifier);
+        Type t = mock(Type.class);
+        when(t.id()).thenReturn(type);
+        Dependency dependency = mock(Dependency.class);
+        when(dependency.getType()).thenReturn(t);
+        Node node = mock(Node.class);
+        when(node.getArtifact()).thenReturn(artifact);
+        when(node.getDependency()).thenReturn(dependency);
+        when(node.getChildren()).thenReturn(Collections.emptyList());
+        return node;
     }
 }

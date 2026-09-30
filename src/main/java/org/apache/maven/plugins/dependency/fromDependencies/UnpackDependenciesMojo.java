@@ -18,29 +18,20 @@
  */
 package org.apache.maven.plugins.dependency.fromDependencies;
 
-import javax.inject.Inject;
-
 import java.io.File;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.utils.DependencyStatusSets;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
 import org.apache.maven.plugins.dependency.utils.UnpackUtil;
 import org.apache.maven.plugins.dependency.utils.filters.MarkerFileFilter;
 import org.apache.maven.plugins.dependency.utils.markers.DefaultFileMarkerHandler;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactsFilter;
 import org.codehaus.plexus.components.io.filemappers.FileMapper;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Goal that unpacks the project dependencies from the repository to a defined location.
@@ -49,11 +40,7 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @since 1.0
  */
 // CHECKSTYLE_OFF: LineLength
-@Mojo(
-        name = "unpack-dependencies",
-        requiresDependencyCollection = ResolutionScope.TEST,
-        defaultPhase = LifecyclePhase.PROCESS_SOURCES,
-        threadSafe = true)
+@Mojo(name = "unpack-dependencies", defaultPhase = "process-sources")
 // CHECKSTYLE_ON: LineLength
 public class UnpackDependenciesMojo extends AbstractFromDependenciesMojo {
 
@@ -129,21 +116,6 @@ public class UnpackDependenciesMojo extends AbstractFromDependenciesMojo {
     @Parameter(property = "mdep.unpack.filemappers")
     private FileMapper[] fileMappers;
 
-    private final UnpackUtil unpackUtil;
-
-    @Inject
-    public UnpackDependenciesMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder,
-            ArtifactHandlerManager artifactHandlerManager,
-            UnpackUtil unpackUtil) {
-        super(session, buildContext, project, resolverUtil, projectBuilder, artifactHandlerManager);
-        this.unpackUtil = unpackUtil;
-    }
-
     @Override
     protected boolean isResolvingAfterFiltering() {
         return true;
@@ -153,14 +125,16 @@ public class UnpackDependenciesMojo extends AbstractFromDependenciesMojo {
      * Main entry into mojo. This method gets the dependencies and iterates through each one passing it to
      * DependencyUtil.unpackFile().
      *
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      * @see #getDependencySets(boolean)
      */
     @Override
-    protected void doExecute() throws MojoExecutionException {
+    protected void doExecute() throws MojoException {
         DependencyStatusSets dss = getDependencySets(this.failOnMissingClassifierArtifact);
+        UnpackUtil unpackUtil = UnpackUtil.create(session);
 
-        for (Artifact artifact : dss.getResolvedDependencies()) {
+        for (Dependency dependency : dss.getResolvedDependencies()) {
+            DownloadedDependency artifact = (DownloadedDependency) dependency;
             File destDir = DependencyUtil.getFormattedOutputDirectory(
                     useSubDirectoryPerScope,
                     useSubDirectoryPerType,
@@ -171,8 +145,8 @@ public class UnpackDependenciesMojo extends AbstractFromDependenciesMojo {
                     outputDirectory,
                     artifact);
             unpackUtil.unpack(
-                    artifact.getFile(),
-                    artifact.getType(),
+                    artifact.getPath().toFile(),
+                    artifact.getType().id(),
                     destDir,
                     getIncludes(),
                     getExcludes(),
@@ -186,8 +160,8 @@ public class UnpackDependenciesMojo extends AbstractFromDependenciesMojo {
             handler.setMarker();
         }
 
-        for (Artifact artifact : dss.getSkippedDependencies()) {
-            getLog().info(artifact.getId() + " already exists in destination.");
+        for (Dependency artifact : dss.getSkippedDependencies()) {
+            getLog().info(DependencyUtil.getId(artifact) + " already exists in destination.");
         }
     }
 

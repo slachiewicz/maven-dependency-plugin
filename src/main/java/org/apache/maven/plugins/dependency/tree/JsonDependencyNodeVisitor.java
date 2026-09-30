@@ -27,7 +27,8 @@ import java.util.LinkedHashMap;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
 
 /**
  * A dependency node visitor that serializes visited nodes to a writer using the JSON format.
@@ -36,13 +37,27 @@ public class JsonDependencyNodeVisitor extends AbstractSerializingVisitor implem
 
     private String indentChar = " ";
 
+    private final String rootType;
+
     /**
      * Creates a new instance of {@link JsonDependencyNodeVisitor}. The writer will be used to write the output.
      *
      * @param writer  the writer to write to
      */
     public JsonDependencyNodeVisitor(Writer writer) {
+        this(writer, "jar");
+    }
+
+    /**
+     * Creates a new instance of {@link JsonDependencyNodeVisitor}. The writer will be used to write the output.
+     * The root node is the project, which has no dependency and therefore no type in the Maven 4 API.
+     *
+     * @param writer  the writer to write to
+     * @param rootType  the type to write for the root node, the packaging of the project
+     */
+    public JsonDependencyNodeVisitor(Writer writer, String rootType) {
         super(writer);
+        this.rootType = rootType;
     }
 
     @Override
@@ -131,17 +146,21 @@ public class JsonDependencyNodeVisitor extends AbstractSerializingVisitor implem
      */
     private void appendNodeValues(StringBuilder sb, int indent, DependencyNode node, boolean hasChildren) {
         Artifact artifact = node.getArtifact();
+        Dependency dependency = node.getDependency();
         Map<String, String> extraValues = extraValues(node);
+        boolean optional = dependency != null && dependency.isOptional();
         appendKeyValue(sb, indent, "groupId", artifact.getGroupId());
         appendKeyValue(sb, indent, "artifactId", artifact.getArtifactId());
-        appendKeyValue(sb, indent, "version", artifact.getVersion());
-        appendKeyValue(sb, indent, "type", artifact.getType());
-        appendKeyValue(sb, indent, "scope", artifact.getScope());
+        appendKeyValue(sb, indent, "version", artifact.getVersion().toString());
+        appendKeyValue(
+                sb, indent, "type", dependency != null ? dependency.getType().id() : rootType);
+        appendKeyValue(
+                sb, indent, "scope", dependency != null ? dependency.getScope().id() : "compile");
         appendKeyValue(sb, indent, "classifier", artifact.getClassifier());
         if (hasChildren || !extraValues.isEmpty()) {
-            appendKeyValue(sb, indent, "optional", String.valueOf(artifact.isOptional()));
+            appendKeyValue(sb, indent, "optional", String.valueOf(optional));
         } else {
-            appendKeyWithoutComma(sb, indent, "optional", String.valueOf(artifact.isOptional()));
+            appendKeyWithoutComma(sb, indent, "optional", String.valueOf(optional));
         }
 
         Iterator<Map.Entry<String, String>> entries = extraValues.entrySet().iterator();
@@ -158,9 +177,8 @@ public class JsonDependencyNodeVisitor extends AbstractSerializingVisitor implem
     }
 
     /**
-     * The additional JSON values of a node, in output order: those of a verbose node, as far as the tree was built
-     * verbose, then <code>size</code>, when known, and <code>totalSize</code> in bytes, as far as the node has sizes.
-     * The values are already JSON, strings in quotes and numbers without, like the existing <code>optional</code>.
+     * The additional JSON values of a node, in output order: the verbose information and the sizes. The values are
+     * already JSON values, like the existing <code>optional</code>.
      */
     private static Map<String, String> extraValues(DependencyNode node) {
         Map<String, String> values = new LinkedHashMap<>();
@@ -189,6 +207,7 @@ public class JsonDependencyNodeVisitor extends AbstractSerializingVisitor implem
             values.put(key, "\"" + value + "\"");
         }
     }
+
     /**
      * Appends a key value pair to the string builder.
      *

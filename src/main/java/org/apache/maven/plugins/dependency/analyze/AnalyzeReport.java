@@ -18,22 +18,21 @@
  */
 package org.apache.maven.plugins.dependency.analyze;
 
-import javax.inject.Inject;
-
 import java.util.Locale;
+import java.util.Map;
+import java.util.ResourceBundle;
 import java.util.Set;
 
-import org.apache.maven.plugins.annotations.Execute;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.annotations.Nullable;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.annotations.Execute;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.reporting.AbstractMavenReport;
 import org.apache.maven.reporting.MavenReportException;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalysis;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzer;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzerException;
-import org.codehaus.plexus.i18n.I18N;
 
 /**
  * Analyzes the dependencies of this project and produces a report that summarizes which are: used and declared; used
@@ -41,20 +40,17 @@ import org.codehaus.plexus.i18n.I18N;
  *
  * @since 2.0-alpha-5
  */
-@Mojo(name = "analyze-report", requiresDependencyResolution = ResolutionScope.TEST, threadSafe = true)
-@Execute(phase = LifecyclePhase.TEST_COMPILE)
+@Mojo(name = "analyze-report")
+@Execute(phase = "test-compile")
 public class AnalyzeReport extends AbstractMavenReport {
     // fields -----------------------------------------------------------------
 
     /**
-     * The Maven project dependency analyzer to use.
+     * The Maven project dependency analyzers, by role hint.
      */
-    private final ProjectDependencyAnalyzer analyzer;
-
-    /**
-     * Internationalization component.
-     */
-    private final I18N i18n;
+    @Inject
+    @Nullable
+    private Map<String, ProjectDependencyAnalyzer> analyzers;
 
     /**
      * Ignore Runtime/Provided/Test/System scopes for unused dependency analysis.
@@ -89,12 +85,6 @@ public class AnalyzeReport extends AbstractMavenReport {
     @Parameter(property = "mdep.analyze.excludedClasses")
     private Set<String> excludedClasses;
 
-    @Inject
-    public AnalyzeReport(ProjectDependencyAnalyzer analyzer, I18N i18n) {
-        this.analyzer = analyzer;
-        this.i18n = i18n;
-    }
-
     // Mojo methods -----------------------------------------------------------
 
     /*
@@ -105,7 +95,7 @@ public class AnalyzeReport extends AbstractMavenReport {
         // Step 1: Analyze the project
         ProjectDependencyAnalysis analysis;
         try {
-            analysis = analyzer.analyze(project, excludedClasses);
+            analysis = analyzer().analyze(session, project, excludedClasses);
 
             if (usedDependencies != null) {
                 ForcedUsage forced = new ForcedUsage(analysis, usedDependencies);
@@ -124,7 +114,7 @@ public class AnalyzeReport extends AbstractMavenReport {
         }
 
         // Step 3: Generate the report
-        AnalyzeReportRenderer r = new AnalyzeReportRenderer(getSink(), i18n, locale, analysis);
+        AnalyzeReportRenderer r = new AnalyzeReportRenderer(getSink(), locale, analysis);
         r.render();
     }
 
@@ -137,7 +127,7 @@ public class AnalyzeReport extends AbstractMavenReport {
         }
 
         // Step 0: Checking pom availability
-        if ("pom".equals(project.getPackaging())) {
+        if ("pom".equals(project.getPackaging().id())) {
             return false;
         }
 
@@ -179,12 +169,24 @@ public class AnalyzeReport extends AbstractMavenReport {
 
     // protected methods ------------------------------------------------------
 
+    private ProjectDependencyAnalyzer analyzer() throws MavenReportException {
+        ProjectDependencyAnalyzer analyzer = analyzers == null ? null : analyzers.get("default");
+        if (analyzer == null && analyzers != null) {
+            // maven-di registers an implementation with a bare @Named under the empty key, not "default"
+            analyzer = analyzers.get("");
+        }
+        if (analyzer == null) {
+            throw new MavenReportException("No ProjectDependencyAnalyzer available");
+        }
+        return analyzer;
+    }
+
     /**
      * @param locale the locale
      * @param key the key to search for
      * @return the text appropriate for the locale
      */
     protected String getI18nString(Locale locale, String key) {
-        return i18n.getString("analyze-report", locale, "report.analyze." + key);
+        return ResourceBundle.getBundle("analyze-report", locale).getString("report.analyze." + key);
     }
 }
