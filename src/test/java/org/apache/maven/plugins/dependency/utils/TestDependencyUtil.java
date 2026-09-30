@@ -20,11 +20,8 @@ package org.apache.maven.plugins.dependency.utils;
 
 import java.io.File;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.ArtifactHandler;
-import org.apache.maven.artifact.versioning.VersionRange;
-import org.apache.maven.plugin.testing.stubs.DefaultArtifactHandlerStub;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -44,39 +41,27 @@ class TestDependencyUtil {
     @TempDir
     File temDir;
 
-    Artifact snap;
+    Dependency snap;
 
-    Artifact snapResolvedVersion;
+    Dependency snapResolvedVersion;
 
-    Artifact release;
+    Dependency release;
 
-    Artifact sources;
+    Dependency sources;
 
     @BeforeEach
     void setUp() {
-
-        ArtifactHandler ah = new DefaultArtifactHandlerStub("jar", null);
-        VersionRange vr = VersionRange.createFromVersion("1.1");
-        release = new DefaultArtifact("test", "one", vr, Artifact.SCOPE_COMPILE, "jar", "sources", ah, false);
-
-        ah = new DefaultArtifactHandlerStub("war", null);
-        vr = VersionRange.createFromVersion("1.1-SNAPSHOT");
-        snap = new DefaultArtifact("test", "two", vr, Artifact.SCOPE_PROVIDED, "war", null, ah, false);
-
-        ah = new DefaultArtifactHandlerStub("war", null);
-        vr = VersionRange.createFromVersion("1.1-SNAPSHOT");
-        snapResolvedVersion = new DefaultArtifact("test", "three", vr, Artifact.SCOPE_PROVIDED, "war", null, ah, false);
-        snapResolvedVersion.setResolvedVersion("1.1-20121003.035531-117");
-
-        ah = new DefaultArtifactHandlerStub("war", null);
-        vr = VersionRange.createFromVersion("1.1-SNAPSHOT");
-        sources = new DefaultArtifact("test", "two", vr, Artifact.SCOPE_PROVIDED, "sources", "sources", ah, false);
+        release = DependencyStubs.dependency("test", "one", "1.1", "compile", "jar", "sources", "jar");
+        snap = DependencyStubs.dependency("test", "two", "1.1-SNAPSHOT", "provided", "war", null, "war");
+        snapResolvedVersion =
+                DependencyStubs.dependency("test", "three", "1.1-20121003.035531-117", "provided", "war", null, "war");
+        sources = DependencyStubs.dependency("test", "two", "1.1-SNAPSHOT", "provided", "sources", "sources", "war");
     }
 
     @Test
     void directoryName() {
         File folder = new File("target/a");
-        final Artifact artifact = release;
+        final Dependency artifact = release;
         File name =
                 DependencyUtil.getFormattedOutputDirectory(false, false, false, false, false, false, folder, artifact);
         // object is the same.
@@ -149,7 +134,7 @@ class TestDependencyUtil {
     @Test
     void directoryName2() {
         File folder = new File("target/a");
-        final Artifact artifact = snap;
+        final Dependency artifact = snap;
         File name =
                 DependencyUtil.getFormattedOutputDirectory(false, false, false, false, false, false, folder, artifact);
         // object is the same.
@@ -221,7 +206,7 @@ class TestDependencyUtil {
 
     @Test
     void fileName() {
-        Artifact artifact = release;
+        Dependency artifact = release;
 
         String name = DependencyUtil.getFormattedFileName(artifact, false);
         String expectedResult = "one-1.1-sources.jar";
@@ -233,7 +218,7 @@ class TestDependencyUtil {
 
     @Test
     void fileNameUseBaseVersion() {
-        Artifact artifact = snapResolvedVersion;
+        Dependency artifact = snapResolvedVersion;
 
         String name = DependencyUtil.getFormattedFileName(artifact, false, false, true);
         String expectedResult = "three-1.1-SNAPSHOT.war";
@@ -245,10 +230,8 @@ class TestDependencyUtil {
 
     @Test
     void testJar() {
-        ArtifactHandler ah = new DefaultArtifactHandlerStub("test-jar", null);
-        VersionRange vr = VersionRange.createFromVersion("1.1-SNAPSHOT");
-        Artifact artifact =
-                new DefaultArtifact("test", "two", vr, Artifact.SCOPE_PROVIDED, "test-jar", null, ah, false);
+        Dependency artifact =
+                DependencyStubs.dependency("test", "two", "1.1-SNAPSHOT", "provided", "test-jar", null, "jar");
 
         String name = DependencyUtil.getFormattedFileName(artifact, false);
         String expectedResult = "two-1.1-SNAPSHOT.jar";
@@ -257,10 +240,8 @@ class TestDependencyUtil {
 
     @Test
     void fileNameClassifier() {
-        ArtifactHandler ah = new DefaultArtifactHandlerStub("jar", "sources");
-        VersionRange vr = VersionRange.createFromVersion("1.1-SNAPSHOT");
-        Artifact artifact =
-                new DefaultArtifact("test", "two", vr, Artifact.SCOPE_PROVIDED, "jar", "sources", ah, false);
+        Dependency artifact =
+                DependencyStubs.dependency("test", "two", "1.1-SNAPSHOT", "provided", "jar", "sources", "jar");
 
         String name = DependencyUtil.getFormattedFileName(artifact, false);
         String expectedResult = "two-1.1-SNAPSHOT-sources.jar";
@@ -274,25 +255,17 @@ class TestDependencyUtil {
         expectedResult = "two-1.1-SNAPSHOT.jar";
         assertEquals(expectedResult, name);
 
-        ah = new DefaultArtifactHandlerStub("war", null);
-        artifact = new DefaultArtifact("test", "two", vr, Artifact.SCOPE_PROVIDED, "war", "", ah, false);
+        artifact = DependencyStubs.dependency("test", "two", "1.1-SNAPSHOT", "provided", "war", "", "war");
         name = DependencyUtil.getFormattedFileName(artifact, true);
         expectedResult = "two.war";
         assertEquals(expectedResult, name);
     }
 
     @Test
-    void fileNameClassifierWithFile() {
-        // specifically testing the default operation that getFormattedFileName
-        // returns
-        // the actual name of the file if available unless remove version is
-        // set.
-        ArtifactHandler ah = new DefaultArtifactHandlerStub("war", "sources");
-        VersionRange vr = VersionRange.createFromVersion("1.1-SNAPSHOT");
-        Artifact artifact =
-                new DefaultArtifact("test", "two", vr, Artifact.SCOPE_PROVIDED, "war", "sources", ah, false);
-        File file = new File("/target", "test-file-name.jar");
-        artifact.setFile(file);
+    void fileNameClassifierWithExtension() {
+        // the extension of the artifact is what ends up in the file name
+        Dependency artifact =
+                DependencyStubs.dependency("test", "two", "1.1-SNAPSHOT", "provided", "war", "sources", "war");
 
         String name = DependencyUtil.getFormattedFileName(artifact, false);
         String expectedResult = "two-1.1-SNAPSHOT-sources.war";
@@ -306,14 +279,12 @@ class TestDependencyUtil {
         expectedResult = "two-sources.war";
         assertEquals(expectedResult, name);
 
-        artifact = new DefaultArtifact("test", "two", vr, Artifact.SCOPE_PROVIDED, "war", "", ah, false);
+        artifact = DependencyStubs.dependency("test", "two", "1.1-SNAPSHOT", "provided", "war", "", "war");
         name = DependencyUtil.getFormattedFileName(artifact, true);
         expectedResult = "two.war";
         assertEquals(expectedResult, name);
 
-        // test that we pick up the correct extension in the file name if set.
-        ah = new DefaultArtifactHandlerStub("jar", null);
-        artifact = new DefaultArtifact("test", "two", vr, Artifact.SCOPE_PROVIDED, "war", "", ah, false);
+        artifact = DependencyStubs.dependency("test", "two", "1.1-SNAPSHOT", "provided", "war", "", "jar");
         name = DependencyUtil.getFormattedFileName(artifact, true);
         expectedResult = "two.jar";
         assertEquals(expectedResult, name);

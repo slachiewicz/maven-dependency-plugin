@@ -18,41 +18,61 @@
  */
 package org.apache.maven.plugins.dependency.utils.translators;
 
-import javax.inject.Inject;
-
 import java.util.HashSet;
-import java.util.Iterator;
+import java.util.Optional;
 import java.util.Set;
 
-import org.apache.maven.api.plugin.testing.MojoTest;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.plugin.logging.Log;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.Type;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.services.TypeRegistry;
 import org.apache.maven.plugins.dependency.testUtils.DependencyArtifactStubFactory;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
+import org.apache.maven.plugins.dependency.utils.DependencySilentLog;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
+import org.mockito.Mockito;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.when;
 
 /**
  * @author brianf
  */
-@MojoTest
 class TestClassifierTypeTranslator {
 
-    Set<Artifact> artifacts = new HashSet<>();
+    Set<Dependency> artifacts = new HashSet<>();
 
-    @Inject
-    private Log log;
+    private final Log log = new DependencySilentLog();
 
-    @Inject
-    private ArtifactHandlerManager artifactHandlerManager;
+    private Session session;
 
     @BeforeEach
     void setUp() throws Exception {
         DependencyArtifactStubFactory factory = new DependencyArtifactStubFactory(null, false);
         artifacts = factory.getMixedArtifacts();
+
+        session = Mockito.mock(Session.class);
+        TypeRegistry typeRegistry = Mockito.mock(TypeRegistry.class);
+        when(session.getService(TypeRegistry.class)).thenReturn(typeRegistry);
+        when(typeRegistry.lookup(anyString())).thenAnswer(invocation -> {
+            String id = invocation.getArgument(0);
+            return Optional.<Type>of(DependencyStubs.type(id));
+        });
+        when(session.createArtifact(anyString(), anyString(), anyString(), any(), any(), any()))
+                .thenAnswer(invocation -> DependencyStubs.dependency(
+                        invocation.getArgument(0),
+                        invocation.getArgument(1),
+                        invocation.getArgument(2),
+                        "compile",
+                        invocation.getArgument(4),
+                        invocation.getArgument(3),
+                        invocation.getArgument(4)));
     }
 
     @Test
@@ -68,26 +88,16 @@ class TestClassifierTypeTranslator {
     private void doTestNullEmptyClassifier(String classifier) {
         String type = "zip";
 
-        ArtifactTranslator at = new ClassifierTypeTranslator(artifactHandlerManager, classifier, type);
-        Set<org.eclipse.aether.artifact.Artifact> results = at.translate(artifacts, log);
+        ArtifactTranslator at = new ClassifierTypeTranslator(session, classifier, type);
+        Set<Artifact> results = at.translate(artifacts, log);
 
-        for (Artifact artifact : artifacts) {
-            Iterator<org.eclipse.aether.artifact.Artifact> resultIter = results.iterator();
-            boolean found = false;
-            while (resultIter.hasNext()) {
-                org.eclipse.aether.artifact.Artifact translatedArtifact = resultIter.next();
-                if (artifact.getArtifactId().equals(translatedArtifact.getArtifactId())
-                        && artifact.getGroupId().equals(translatedArtifact.getGroupId())
-                /* && artifact.getScope().equals(translatedArtifact.getScope()) */ ) {
-                    // classifier is always empty for Resolver sub artifact
-                    assertEquals("", translatedArtifact.getClassifier());
-                    assertEquals(type, translatedArtifact.getExtension());
-
-                    found = true;
-                    break;
-                }
-            }
-            assertTrue(found);
+        for (Dependency artifact : artifacts) {
+            // the classifier of the artifact is kept when there is none to translate to
+            assertTrue(results.stream()
+                    .anyMatch(translated -> artifact.getArtifactId().equals(translated.getArtifactId())
+                            && artifact.getGroupId().equals(translated.getGroupId())
+                            && artifact.getClassifier().equals(translated.getClassifier())
+                            && type.equals(translated.getExtension())));
         }
     }
 
@@ -104,26 +114,16 @@ class TestClassifierTypeTranslator {
     private void doTestNullEmptyType(String type) {
         String classifier = "jdk5";
 
-        ArtifactTranslator at = new ClassifierTypeTranslator(artifactHandlerManager, classifier, type);
-        Set<org.eclipse.aether.artifact.Artifact> results = at.translate(artifacts, log);
+        ArtifactTranslator at = new ClassifierTypeTranslator(session, classifier, type);
+        Set<Artifact> results = at.translate(artifacts, log);
 
-        for (Artifact artifact : artifacts) {
-            Iterator<org.eclipse.aether.artifact.Artifact> resultIter = results.iterator();
-            boolean found = false;
-            while (!found && resultIter.hasNext()) {
-                org.eclipse.aether.artifact.Artifact translatedArtifact = resultIter.next();
-                if (artifact.getArtifactId() == translatedArtifact.getArtifactId()
-                        && artifact.getGroupId() == translatedArtifact.getGroupId()
-                /* && artifact.getScope() == translatedArtifact.getScope() */ ) {
-                    // classifier is null, should be the same as the artifact
-                    assertEquals(classifier, translatedArtifact.getClassifier());
-                    assertEquals(artifact.getType(), translatedArtifact.getExtension());
-
-                    found = true;
-                    break;
-                }
-            }
-            assertTrue(found);
+        for (Dependency artifact : artifacts) {
+            // the type of the artifact is kept when there is none to translate to
+            assertTrue(results.stream()
+                    .anyMatch(translated -> artifact.getArtifactId().equals(translated.getArtifactId())
+                            && artifact.getGroupId().equals(translated.getGroupId())
+                            && classifier.equals(translated.getClassifier())
+                            && artifact.getType().id().equals(translated.getExtension())));
         }
     }
 
@@ -131,24 +131,15 @@ class TestClassifierTypeTranslator {
     void testClassifierAndType() {
         String classifier = "jdk14";
         String type = "sources";
-        ArtifactTranslator at = new ClassifierTypeTranslator(artifactHandlerManager, classifier, type);
-        Set<org.eclipse.aether.artifact.Artifact> results = at.translate(artifacts, log);
+        ArtifactTranslator at = new ClassifierTypeTranslator(session, classifier, type);
+        Set<Artifact> results = at.translate(artifacts, log);
 
-        for (Artifact artifact : artifacts) {
-            Iterator<org.eclipse.aether.artifact.Artifact> resultIter = results.iterator();
-            boolean found = false;
-            while (!found && resultIter.hasNext()) {
-                org.eclipse.aether.artifact.Artifact translatedArtifact = resultIter.next();
-                if (artifact.getArtifactId() == translatedArtifact.getArtifactId()
-                        && artifact.getGroupId() == translatedArtifact.getGroupId()) {
-                    assertEquals(classifier, translatedArtifact.getClassifier());
-                    assertEquals(type, translatedArtifact.getExtension());
-
-                    found = true;
-                    break;
-                }
-            }
-            assertTrue(found);
+        for (Dependency artifact : artifacts) {
+            assertTrue(results.stream()
+                    .anyMatch(translated -> artifact.getArtifactId().equals(translated.getArtifactId())
+                            && artifact.getGroupId().equals(translated.getGroupId())
+                            && classifier.equals(translated.getClassifier())
+                            && type.equals(translated.getExtension())));
         }
     }
 
@@ -156,7 +147,7 @@ class TestClassifierTypeTranslator {
     void testGetterSetter() {
         String classifier = "class";
         String type = "type";
-        ClassifierTypeTranslator at = new ClassifierTypeTranslator(artifactHandlerManager, classifier, type);
+        ClassifierTypeTranslator at = new ClassifierTypeTranslator(session, classifier, type);
 
         assertEquals(classifier, at.getClassifier());
         assertEquals(type, at.getType());

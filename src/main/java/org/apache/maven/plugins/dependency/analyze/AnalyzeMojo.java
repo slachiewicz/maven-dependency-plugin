@@ -18,14 +18,8 @@
  */
 package org.apache.maven.plugins.dependency.analyze;
 
-import javax.inject.Inject;
-
-import org.apache.maven.plugins.annotations.Execute;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.ResolutionScope;
-import org.apache.maven.project.MavenProject;
-import org.codehaus.plexus.PlexusContainer;
+import org.apache.maven.api.plugin.annotations.Execute;
+import org.apache.maven.api.plugin.annotations.Mojo;
 
 /**
  * Analyzes the dependencies of this project and determines which are: used and declared; used and undeclared; unused
@@ -41,13 +35,8 @@ import org.codehaus.plexus.PlexusContainer;
  * @see AnalyzeOnlyMojo
  * @since 2.0-alpha-3
  */
-@Mojo(name = "analyze", requiresDependencyResolution = ResolutionScope.TEST, threadSafe = true)
-@Execute(phase = LifecyclePhase.TEST_COMPILE)
+@Mojo(name = "analyze")
+@Execute(phase = "test-compile")
 public class AnalyzeMojo extends AbstractAnalyzeMojo {
     // subclassed to provide annotations
-
-    @Inject
-    public AnalyzeMojo(PlexusContainer plexusContainer, MavenProject project) {
-        super(plexusContainer, project);
-    }
 }

@@ -22,13 +22,10 @@ import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
-import org.apache.maven.artifact.handler.ArtifactHandler;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
-import org.apache.maven.artifact.versioning.VersionRange;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
 import org.apache.maven.plugins.dependency.testUtils.stubs.StubDefaultFileMarkerHandler;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -43,22 +40,20 @@ import static org.junit.jupiter.api.Assertions.fail;
  * @author brianf
  */
 class TestDefaultMarkerFileHandler {
-    List<Artifact> artifacts = new ArrayList<>();
+    List<ResolvedDependency> artifacts = new ArrayList<>();
 
     @TempDir
     File outputFolder;
 
     @BeforeEach
     void setUp() {
-        ArtifactHandler ah = new DefaultArtifactHandler();
-        VersionRange vr = VersionRange.createFromVersion("1.1");
-        Artifact artifact = new DefaultArtifact("test", "1", vr, Artifact.SCOPE_COMPILE, "jar", "", ah, false);
+        ResolvedDependency artifact = resolved("test", "1", "compile", "jar");
         artifacts.add(artifact);
-        artifact = new DefaultArtifact("test", "2", vr, Artifact.SCOPE_PROVIDED, "war", "", ah, false);
+        artifact = resolved("test", "2", "provided", "war");
         artifacts.add(artifact);
-        artifact = new DefaultArtifact("test", "3", vr, Artifact.SCOPE_TEST, "sources", "", ah, false);
+        artifact = resolved("test", "3", "test", "sources");
         artifacts.add(artifact);
-        artifact = new DefaultArtifact("test", "4", vr, Artifact.SCOPE_RUNTIME, "zip", "", ah, false);
+        artifact = resolved("test", "4", "runtime", "zip");
         artifacts.add(artifact);
     }
 
@@ -109,8 +104,7 @@ class TestDefaultMarkerFileHandler {
         File theFile = new File(outputFolder, "theFile.jar");
         outputFolder.mkdirs();
         theFile.createNewFile();
-        Artifact theArtifact = artifacts.get(0);
-        theArtifact.setFile(theFile);
+        ResolvedDependency theArtifact = ResolvedDependency.of(null, artifacts.get(0), theFile.toPath());
         DefaultFileMarkerHandler handler = new DefaultFileMarkerHandler(theArtifact, this.outputFolder);
         assertFalse(handler.isMarkerSet());
         // if the marker is not set, assume it is infinitely older than the
@@ -134,7 +128,7 @@ class TestDefaultMarkerFileHandler {
         try {
             handler.setMarker();
             fail("Expected an Exception here");
-        } catch (MojoExecutionException e) {
+        } catch (MojoException e) {
 
         }
     }
@@ -162,5 +156,10 @@ class TestDefaultMarkerFileHandler {
         assertTrue(handler.isMarkerSet());
         handler.clearMarker();
         assertFalse(handler.isMarkerSet());
+    }
+
+    private static ResolvedDependency resolved(String groupId, String artifactId, String scope, String type) {
+        return ResolvedDependency.of(
+                null, DependencyStubs.dependency(groupId, artifactId, "1.1", scope, type, ""), null);
     }
 }

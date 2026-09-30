@@ -21,7 +21,7 @@ package org.apache.maven.plugins.dependency.resolvers;
 import java.util.List;
 import java.util.function.Predicate;
 
-import org.apache.maven.model.Plugin;
+import org.apache.maven.api.model.Plugin;
 
 /**
  * A filter to include or exclude plugins.

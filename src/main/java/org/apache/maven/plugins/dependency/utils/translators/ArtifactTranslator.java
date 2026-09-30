@@ -20,17 +20,22 @@ package org.apache.maven.plugins.dependency.utils.translators;
 
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.logging.Log;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.plugin.Log;
 
 /**
+ * Translates the artifacts to another set of artifacts.
+ *
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  */
 public interface ArtifactTranslator {
     /**
-     * @param artifacts set of {@link Artifact}s
-     * @param log {@link Log}
-     * @return set of {@link org.eclipse.aether.artifact.Artifact}
+     * Translates the artifacts to another set of artifacts.
+     *
+     * @param artifacts the artifacts to translate
+     * @param log a logger
+     * @return the translated artifacts
      */
-    Set<org.eclipse.aether.artifact.Artifact> translate(Set<Artifact> artifacts, Log log);
+    Set<Artifact> translate(Set<Dependency> artifacts, Log log);
 }

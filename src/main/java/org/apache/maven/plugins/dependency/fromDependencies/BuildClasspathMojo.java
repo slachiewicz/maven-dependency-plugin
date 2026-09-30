@@ -18,8 +18,6 @@
  */
 package org.apache.maven.plugins.dependency.fromDependencies;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
 import java.io.Writer;
@@ -38,21 +36,15 @@ import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.ProducedArtifact;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.ProjectManager;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.MavenProjectHelper;
-import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactsFilter;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * This goal outputs a classpath string of dependencies from the local repository to a file or log.
@@ -60,12 +52,8 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author ankostis
  * @since 2.0-alpha-2
  */
-@Mojo(
-        name = "build-classpath",
-        requiresDependencyResolution = ResolutionScope.TEST,
-        defaultPhase = LifecyclePhase.GENERATE_SOURCES,
-        threadSafe = true)
-public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements Comparator<Artifact> {
+@Mojo(name = "build-classpath", defaultPhase = "generate-sources")
+public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements Comparator<Dependency> {
 
     @Parameter(property = "outputEncoding", defaultValue = "${project.reporting.outputEncoding}")
     private String outputEncoding;
@@ -164,29 +152,14 @@ public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements 
     @Parameter(property = "mdep.useBaseVersion", defaultValue = "true")
     private boolean useBaseVersion = true;
 
-    private final MavenProjectHelper projectHelper;
-
-    @Inject
-    protected BuildClasspathMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder,
-            ArtifactHandlerManager artifactHandlerManager,
-            MavenProjectHelper projectHelper) {
-        super(session, buildContext, project, resolverUtil, projectBuilder, artifactHandlerManager);
-        this.projectHelper = projectHelper;
-    }
-
     /**
      * Main entry into mojo. Gets the list of dependencies and iterates to create a classpath.
      *
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      * @see #getResolvedDependencies(boolean)
      */
     @Override
-    protected void doExecute() throws MojoExecutionException {
+    protected void doExecute() throws MojoException {
         // initialize the separators.
         boolean isFileSepSet = fileSeparator != null && !fileSeparator.isEmpty();
         boolean isPathSepSet = pathSeparator != null && !pathSeparator.isEmpty();
@@ -196,23 +169,23 @@ public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements 
             localRepoProperty = "${M2_REPO}";
         }
 
-        Set<Artifact> artifacts = getResolvedDependencies(true);
+        Set<Dependency> artifacts = getResolvedDependencies(true);
 
         if (artifacts.isEmpty()) {
             getLog().info("No dependencies found.");
         }
 
-        List<Artifact> artList = new ArrayList<>(artifacts);
+        List<Dependency> artList = new ArrayList<>(artifacts);
 
         StringBuilder sb = new StringBuilder();
-        Iterator<Artifact> i = artList.iterator();
+        Iterator<Dependency> i = artList.iterator();
 
         if (i.hasNext()) {
-            appendArtifactPath(i.next(), sb);
+            appendArtifactPath((DownloadedDependency) i.next(), sb);
 
             while (i.hasNext()) {
                 sb.append(isPathSepSet ? this.pathSeparator : File.pathSeparator);
-                appendArtifactPath(i.next(), sb);
+                appendArtifactPath((DownloadedDependency) i.next(), sb);
             }
         }
 
@@ -233,7 +206,7 @@ public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements 
         }
 
         if (outputProperty != null) {
-            getProject().getProperties().setProperty(outputProperty, cpString);
+            session.getService(ProjectManager.class).setProperty(getProject(), outputProperty, cpString);
             if (getLog().isDebugEnabled()) {
                 getLog().debug(outputProperty + " = " + cpString);
             }
@@ -258,21 +231,29 @@ public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements 
 
     /**
      * @param cpString the classpath
-     * @throws MojoExecutionException in case of an error
+     * @throws MojoException in case of an error
      */
-    protected void attachFile(String cpString) throws MojoExecutionException {
+    protected void attachFile(String cpString) throws MojoException {
         File attachedFile = new File(getProject().getBuild().getDirectory(), "classpath");
         storeClasspathFile(cpString, attachedFile);
 
-        projectHelper.attachArtifact(getProject(), attachedFile, "classpath");
+        ProducedArtifact attached = session.createProducedArtifact(
+                getProject().getGroupId(),
+                getProject().getArtifactId(),
+                getProject().getVersion(),
+                "classpath",
+                "classpath",
+                null);
+        session.getService(ProjectManager.class).attachArtifact(getProject(), attached, attachedFile.toPath());
     }
 
     /**
      * Appends the artifact path to the specified StringBuilder.
      */
-    protected void appendArtifactPath(Artifact artifact, StringBuilder sb) {
+    protected void appendArtifactPath(DownloadedDependency artifact, StringBuilder sb) {
         if (prefix == null) {
-            File artifactFile = artifact.getFile();
+            File artifactFile =
+                    artifact.getPath() == null ? null : artifact.getPath().toFile();
             if (artifactFile == null) {
                 this.getLog().warn(artifact + " file is null.");
                 return;
@@ -280,8 +261,7 @@ public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements 
             String file = artifactFile.getPath();
             // substitute the property for the local repo path to make the classpath file portable.
             if (localRepoProperty != null && !localRepoProperty.isEmpty()) {
-                File localBasedir =
-                        session.getRepositorySession().getLocalRepository().getBasedir();
+                File localBasedir = session.getLocalRepository().getPath().toFile();
                 file = StringUtils.replace(file, localBasedir.getAbsolutePath(), localRepoProperty);
             }
             sb.append(file);
@@ -316,7 +296,7 @@ public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements 
      *
      * @param cpString the string to write into the file
      */
-    private void storeClasspathFile(String cpString, File out) throws MojoExecutionException {
+    private void storeClasspathFile(String cpString, File out) throws MojoException {
         // make sure the parent path exists.
         out.getParentFile().mkdirs();
 
@@ -325,7 +305,7 @@ public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements 
             w.write(cpString);
             getLog().info("Wrote classpath file '" + out + "'.");
         } catch (IOException ex) {
-            throw new MojoExecutionException("Error while writing to classpath file '" + out, ex);
+            throw new MojoException("Error while writing to classpath file '" + out, ex);
         }
     }
 
@@ -363,7 +343,7 @@ public class BuildClasspathMojo extends AbstractDependencyFilterMojo implements 
      *         <code>0</code> if this string is lexicographically greater than the string argument
      */
     @Override
-    public int compare(Artifact art1, Artifact art2) {
+    public int compare(Dependency art1, Dependency art2) {
         if (art1 == art2) {
             return 0;
         } else if (art1 == null) {

@@ -21,9 +21,9 @@ package org.apache.maven.plugins.dependency.utils.filters;
 import java.io.File;
 import java.io.IOException;
 
-import org.apache.maven.artifact.Artifact;
 import org.apache.maven.plugins.dependency.testUtils.DependencyArtifactStubFactory;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -48,12 +48,12 @@ class TestDestFileFilter {
         this.fact = new DependencyArtifactStubFactory(outputFolder, false);
     }
 
-    private void createFile(Artifact artifact) throws IOException {
+    private void createFile(ResolvedDependency artifact) throws IOException {
         createFile(artifact, false, false, false);
     }
 
     private File createFile(
-            Artifact artifact,
+            ResolvedDependency artifact,
             boolean useSubDirectoryPerArtifact,
             boolean useSubDirectoryPerType,
             boolean removeVersion)
@@ -62,7 +62,7 @@ class TestDestFileFilter {
     }
 
     private File createFile(
-            Artifact artifact,
+            ResolvedDependency artifact,
             boolean useSubDirectoryPerArtifact,
             boolean useSubDirectoryPerType,
             boolean removeVersion,
@@ -82,7 +82,7 @@ class TestDestFileFilter {
     @Test
     void destFileRelease() throws Exception {
         DestFileFilter filter = new DestFileFilter(outputFolder);
-        Artifact artifact = fact.getReleaseArtifact();
+        ResolvedDependency artifact = fact.getReleaseArtifact();
 
         assertTrue(filter.isArtifactIncluded(artifact));
         createFile(artifact);
@@ -95,7 +95,7 @@ class TestDestFileFilter {
     @Test
     void destFileSnapshot() throws Exception {
         DestFileFilter filter = new DestFileFilter(outputFolder);
-        Artifact artifact = fact.getSnapshotArtifact();
+        ResolvedDependency artifact = fact.getSnapshotArtifact();
 
         assertTrue(filter.isArtifactIncluded(artifact));
         createFile(artifact);
@@ -108,7 +108,7 @@ class TestDestFileFilter {
     @Test
     void destFileStripVersion() throws Exception {
         DestFileFilter filter = new DestFileFilter(outputFolder);
-        Artifact artifact = fact.getSnapshotArtifact();
+        ResolvedDependency artifact = fact.getSnapshotArtifact();
         filter.setRemoveVersion(true);
 
         assertTrue(filter.isArtifactIncluded(artifact));
@@ -122,7 +122,7 @@ class TestDestFileFilter {
     @Test
     void destFileStripClassifier() throws Exception {
         DestFileFilter filter = new DestFileFilter(outputFolder);
-        Artifact artifact = fact.getSnapshotArtifact();
+        ResolvedDependency artifact = fact.getSnapshotArtifact();
         filter.setRemoveClassifier(true);
 
         assertTrue(filter.isArtifactIncluded(artifact));
@@ -136,7 +136,7 @@ class TestDestFileFilter {
     @Test
     void destFileSubPerArtifact() throws Exception {
         DestFileFilter filter = new DestFileFilter(outputFolder);
-        Artifact artifact = fact.getSnapshotArtifact();
+        ResolvedDependency artifact = fact.getSnapshotArtifact();
         filter.setUseSubDirectoryPerArtifact(true);
 
         assertTrue(filter.isArtifactIncluded(artifact));
@@ -150,7 +150,7 @@ class TestDestFileFilter {
     @Test
     void destFileSubPerType() throws Exception {
         DestFileFilter filter = new DestFileFilter(outputFolder);
-        Artifact artifact = fact.getSnapshotArtifact();
+        ResolvedDependency artifact = fact.getSnapshotArtifact();
         filter.setUseSubDirectoryPerType(true);
 
         assertTrue(filter.isArtifactIncluded(artifact));
@@ -165,9 +165,11 @@ class TestDestFileFilter {
     void destFileOverwriteIfNewer() throws Exception {
         DestFileFilter filter = new DestFileFilter(outputFolder);
 
+        // the source file must not be where the destination file is created
+        fact.setWorkingDir(new File(outputFolder, "source"));
         fact.setCreateFiles(true);
-        Artifact artifact = fact.getSnapshotArtifact();
-        File artifactFile = artifact.getFile();
+        ResolvedDependency artifact = fact.getSnapshotArtifact();
+        File artifactFile = artifact.getPath().toFile();
         assertTrue(artifactFile.setLastModified(artifactFile.lastModified()));
         filter.setOverWriteIfNewer(true);
 

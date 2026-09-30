@@ -23,9 +23,8 @@ import java.util.List;
 import java.util.Set;
 import java.util.function.Predicate;
 
-import org.apache.maven.artifact.ArtifactUtils;
-import org.apache.maven.model.Plugin;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.model.Plugin;
 
 /**
  * A filter to exclude plugins that are part of the current reactor build.
@@ -34,16 +33,20 @@ class PluginsReactorExcludeFilter implements Predicate<Plugin> {
 
     private final Set<String> reactorArtifactKeys;
 
-    PluginsReactorExcludeFilter(List<MavenProject> reactorProjects) {
+    PluginsReactorExcludeFilter(List<Project> reactorProjects) {
         this.reactorArtifactKeys = new LinkedHashSet<>(reactorProjects.size());
-        for (final MavenProject project : reactorProjects) {
-            this.reactorArtifactKeys.add(ArtifactUtils.key(project.getArtifact()));
+        for (final Project project : reactorProjects) {
+            this.reactorArtifactKeys.add(key(project.getGroupId(), project.getArtifactId(), project.getVersion()));
         }
     }
 
     @Override
     public boolean test(Plugin plugin) {
-        String pluginKey = ArtifactUtils.key(plugin.getGroupId(), plugin.getArtifactId(), plugin.getVersion());
+        String pluginKey = key(plugin.getGroupId(), plugin.getArtifactId(), plugin.getVersion());
         return !reactorArtifactKeys.contains(pluginKey);
+    }
+
+    private static String key(String groupId, String artifactId, String version) {
+        return groupId + ":" + artifactId + ":" + version;
     }
 }

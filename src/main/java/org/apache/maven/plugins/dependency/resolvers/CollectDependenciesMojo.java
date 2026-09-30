@@ -18,17 +18,7 @@
  */
 package org.apache.maven.plugins.dependency.resolvers;
 
-import javax.inject.Inject;
-
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.ResolutionScope;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
-import org.sonatype.plexus.build.incremental.BuildContext;
+import org.apache.maven.api.plugin.annotations.Mojo;
 
 /**
  * <p>
@@ -48,21 +38,14 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  * @since 3.0
  */
-@Mojo(
-        name = "collect",
-        requiresDependencyCollection = ResolutionScope.TEST,
-        defaultPhase = LifecyclePhase.GENERATE_SOURCES,
-        threadSafe = true)
+@Mojo(name = "collect", defaultPhase = "generate-sources")
 public class CollectDependenciesMojo extends ResolveDependenciesMojo {
 
-    @Inject
-    protected CollectDependenciesMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder,
-            ArtifactHandlerManager artifactHandlerManager) {
-        super(session, buildContext, project, resolverUtil, projectBuilder, artifactHandlerManager);
+    /**
+     * Only collects the dependency graph, without downloading any file.
+     */
+    @Override
+    protected boolean isCollectOnly() {
+        return true;
     }
 }

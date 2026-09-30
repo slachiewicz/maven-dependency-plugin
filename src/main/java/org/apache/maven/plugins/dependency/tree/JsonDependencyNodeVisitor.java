@@ -24,7 +24,8 @@ import java.io.Writer;
 import java.util.HashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
 
 /**
  * A dependency node visitor that serializes visited nodes to a writer using the JSON format.
@@ -33,13 +34,27 @@ public class JsonDependencyNodeVisitor extends AbstractSerializingVisitor implem
 
     private String indentChar = " ";
 
+    private final String rootType;
+
     /**
      * Creates a new instance of {@link JsonDependencyNodeVisitor}. The writer will be used to write the output.
      *
      * @param writer  the writer to write to
      */
     public JsonDependencyNodeVisitor(Writer writer) {
+        this(writer, "jar");
+    }
+
+    /**
+     * Creates a new instance of {@link JsonDependencyNodeVisitor}. The writer will be used to write the output.
+     * The root node is the project, which has no dependency and therefore no type in the Maven 4 API.
+     *
+     * @param writer  the writer to write to
+     * @param rootType  the type to write for the root node, the packaging of the project
+     */
+    public JsonDependencyNodeVisitor(Writer writer, String rootType) {
         super(writer);
+        this.rootType = rootType;
     }
 
     @Override
@@ -84,7 +99,12 @@ public class JsonDependencyNodeVisitor extends AbstractSerializingVisitor implem
             return;
         }
         visited.add(node);
-        appendNodeValues(sb, indent, node.getArtifact(), !node.getChildren().isEmpty());
+        appendNodeValues(
+                sb,
+                indent,
+                node.getArtifact(),
+                node.getDependency(),
+                !node.getChildren().isEmpty());
         if (!node.getChildren().isEmpty()) {
             writeChildren(indent, node, sb, visited);
         }
@@ -126,17 +146,21 @@ public class JsonDependencyNodeVisitor extends AbstractSerializingVisitor implem
      * @param artifact  the artifact to write
      * @param hasChildren  true if the artifact has children
      */
-    private void appendNodeValues(StringBuilder sb, int indent, Artifact artifact, boolean hasChildren) {
+    private void appendNodeValues(
+            StringBuilder sb, int indent, Artifact artifact, Dependency dependency, boolean hasChildren) {
+        boolean optional = dependency != null && dependency.isOptional();
         appendKeyValue(sb, indent, "groupId", artifact.getGroupId());
         appendKeyValue(sb, indent, "artifactId", artifact.getArtifactId());
-        appendKeyValue(sb, indent, "version", artifact.getVersion());
-        appendKeyValue(sb, indent, "type", artifact.getType());
-        appendKeyValue(sb, indent, "scope", artifact.getScope());
+        appendKeyValue(sb, indent, "version", artifact.getVersion().toString());
+        appendKeyValue(
+                sb, indent, "type", dependency != null ? dependency.getType().id() : rootType);
+        appendKeyValue(
+                sb, indent, "scope", dependency != null ? dependency.getScope().id() : "compile");
         appendKeyValue(sb, indent, "classifier", artifact.getClassifier());
         if (hasChildren) {
-            appendKeyValue(sb, indent, "optional", String.valueOf(artifact.isOptional()));
+            appendKeyValue(sb, indent, "optional", String.valueOf(optional));
         } else {
-            appendKeyWithoutComma(sb, indent, "optional", String.valueOf(artifact.isOptional()));
+            appendKeyWithoutComma(sb, indent, "optional", String.valueOf(optional));
         }
     }
     /**

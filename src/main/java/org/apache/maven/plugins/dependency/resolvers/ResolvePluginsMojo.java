@@ -18,33 +18,26 @@
  */
 package org.apache.maven.plugins.dependency.resolvers;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.Plugin;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedArtifact;
+import org.apache.maven.api.model.Plugin;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.AbstractDependencyMojo;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.apache.maven.project.MavenProject;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.resolution.ArtifactDescriptorException;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
-import org.eclipse.aether.resolution.DependencyResolutionException;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Goal that resolves all project plugins and reports and their dependencies.
@@ -52,7 +45,7 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  * @since 2.0
  */
-@Mojo(name = "resolve-plugins", defaultPhase = LifecyclePhase.GENERATE_SOURCES, threadSafe = true)
+@Mojo(name = "resolve-plugins", defaultPhase = "generate-sources")
 public class ResolvePluginsMojo extends AbstractDependencyMojo {
 
     /**
@@ -137,22 +130,8 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
     @Parameter(property = "outputAbsoluteArtifactFilename", defaultValue = "false")
     private boolean outputAbsoluteArtifactFilename;
 
-    private final ResolverUtil resolverUtil;
-
-    @Inject
-    public ResolvePluginsMojo(
-            MavenSession session, BuildContext buildContext, MavenProject project, ResolverUtil resolverUtil) {
-        super(session, buildContext, project);
-        this.resolverUtil = resolverUtil;
-    }
-
-    /**
-     * Main entry into mojo. Gets the list of dependencies and iterates through displaying the resolved version.
-     *
-     * @throws MojoExecutionException with a message if an error occurs
-     */
     @Override
-    protected void doExecute() throws MojoExecutionException {
+    protected void doExecute() throws MojoException {
         try {
             final Set<Plugin> plugins = getProjectPlugins();
 
@@ -165,34 +144,36 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
                 sb.append(System.lineSeparator());
             } else {
                 for (Plugin plugin : plugins) {
-                    Artifact pluginArtifact = resolverUtil.resolvePlugin(plugin);
+                    DownloadedArtifact pluginArtifact = getResolverUtil().resolvePlugin(plugin);
                     String artifactFilename = null;
                     if (outputAbsoluteArtifactFilename) {
                         // we want to print the absolute file name here
-                        artifactFilename = Optional.ofNullable(pluginArtifact.getFile())
-                                .map(File::getAbsoluteFile)
-                                .map(File::getPath)
+                        artifactFilename = Optional.ofNullable(pluginArtifact.getPath())
+                                .map(Path::toAbsolutePath)
+                                .map(Path::toString)
                                 .orElse(null);
                     }
 
-                    String id = pluginArtifact.toString();
+                    String id = ResolverUtil.toString(pluginArtifact);
                     sb.append("   ")
                             .append(id)
                             .append(outputAbsoluteArtifactFilename ? ":" + artifactFilename : "")
                             .append(System.lineSeparator());
 
                     if (!excludeTransitive) {
-                        for (Artifact artifact : resolverUtil.resolveDependencies(plugin, getDependencyFilter())) {
+                        for (Map.Entry<Dependency, Path> artifact : getResolverUtil()
+                                .resolveDependencies(plugin, getDependencyFilter())
+                                .entrySet()) {
                             artifactFilename = null;
                             if (outputAbsoluteArtifactFilename) {
                                 // we want to print the absolute file name here
-                                artifactFilename = Optional.ofNullable(artifact.getFile())
-                                        .map(File::getAbsoluteFile)
-                                        .map(File::getPath)
+                                artifactFilename = Optional.ofNullable(artifact.getValue())
+                                        .map(Path::toAbsolutePath)
+                                        .map(Path::toString)
                                         .orElse(null);
                             }
 
-                            id = artifact.toString();
+                            id = ResolverUtil.toString(artifact.getKey());
                             sb.append("      ")
                                     .append(id)
                                     .append(outputAbsoluteArtifactFilename ? ":" + artifactFilename : "")
@@ -210,15 +191,12 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
                     DependencyUtil.write(output, outputFile, appendOutput, encoding);
                 }
             }
-        } catch (IOException
-                | ArtifactResolutionException
-                | DependencyResolutionException
-                | ArtifactDescriptorException e) {
-            throw new MojoExecutionException(e.getMessage(), e);
+        } catch (IOException | RuntimeException e) {
+            throw new MojoException(e.getMessage(), e);
         }
     }
 
-    private Predicate<Dependency> getDependencyFilter() {
+    private Predicate<org.apache.maven.api.model.Dependency> getDependencyFilter() {
         if (excludeReactor) {
             return new ExcludeReactorProjectsDependencyFilter(session.getProjects());
         } else {
@@ -241,7 +219,7 @@ public class ResolvePluginsMojo extends AbstractDependencyMojo {
             reactorExclusionFilter = new PluginsReactorExcludeFilter(session.getProjects());
         }
 
-        return resolverUtil.getProjectPlugins(getProject()).stream()
+        return getResolverUtil().getProjectPlugins(getProject()).stream()
                 .filter(reactorExclusionFilter)
                 .filter(pluginsFilter)
                 .collect(Collectors.toSet());

@@ -21,6 +21,7 @@ package org.apache.maven.plugins.dependency.utils.markers;
 import java.io.File;
 
 import org.apache.maven.plugins.dependency.fromConfiguration.ArtifactItem;
+import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 
 /**
  * @author <a href="mailto:dbradicich@comcast.net">Damian Bradicich</a>
@@ -70,8 +71,9 @@ public class UnpackFileMarkerHandler extends DefaultFileMarkerHandler {
                 includeExcludeHash += this.artifactItem.getExcludes().hashCode();
             }
 
-            markerFile =
-                    new File(this.markerFilesDirectory, this.artifact.getId().replace(':', '-') + includeExcludeHash);
+            markerFile = new File(
+                    this.markerFilesDirectory,
+                    DependencyUtil.getId(this.artifact).replace(':', '-') + includeExcludeHash);
         }
 
         return markerFile;

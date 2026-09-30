@@ -29,9 +29,9 @@ import java.nio.file.OpenOption;
 import java.nio.file.StandardOpenOption;
 import java.util.Objects;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.ArtifactUtils;
-import org.apache.maven.plugin.logging.Log;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.plugin.Log;
 
 /**
  * Utility class with static helper methods.
@@ -47,7 +47,7 @@ public final class DependencyUtil {
      * @param artifact file to be formatted
      * @param removeVersion specifies if the version should be removed from the file name
      * @return formatted file name in the format artifactId-[version]-[classifier].[type]
-     * @see #getFormattedFileName(Artifact, boolean, boolean)
+     * @see #getFormattedFileName(Dependency, boolean, boolean)
      */
     public static String getFormattedFileName(Artifact artifact, boolean removeVersion) {
         return getFormattedFileName(artifact, removeVersion, false);
@@ -110,9 +110,9 @@ public final class DependencyUtil {
         String versionString = "";
         if (!removeVersion) {
             if (useBaseVersion) {
-                versionString = "-" + ArtifactUtils.toSnapshotVersion(artifact.getVersion());
+                versionString = "-" + artifact.getBaseVersion().toString();
             } else {
-                versionString = "-" + artifact.getVersion();
+                versionString = "-" + artifact.getVersion().toString();
             }
         }
 
@@ -125,7 +125,7 @@ public final class DependencyUtil {
         }
         destFileName.append(artifact.getArtifactId()).append(versionString);
         destFileName.append(classifierString).append(".");
-        destFileName.append(artifact.getArtifactHandler().getExtension());
+        destFileName.append(artifact.getExtension());
 
         return destFileName.toString();
     }
@@ -152,7 +152,7 @@ public final class DependencyUtil {
             boolean removeVersion,
             boolean removeType,
             File outputDirectory,
-            Artifact artifact) {
+            Dependency artifact) {
         StringBuilder sb = new StringBuilder(128);
         if (useRepositoryLayout) {
             // group id
@@ -160,13 +160,13 @@ public final class DependencyUtil {
             // artifact id
             sb.append(artifact.getArtifactId()).append(File.separatorChar);
             // version
-            sb.append(artifact.getBaseVersion()).append(File.separatorChar);
+            sb.append(artifact.getBaseVersion().toString()).append(File.separatorChar);
         } else {
             if (useSubdirsPerScope) {
-                sb.append(artifact.getScope()).append(File.separatorChar);
+                sb.append(artifact.getScope().id()).append(File.separatorChar);
             }
             if (useSubdirsPerType) {
-                sb.append(artifact.getType()).append("s").append(File.separatorChar);
+                sb.append(artifact.getType().id()).append("s").append(File.separatorChar);
             }
             if (useSubdirPerArtifact) {
                 String artifactString = getDependencyId(artifact, removeVersion, removeType);
@@ -176,14 +176,14 @@ public final class DependencyUtil {
         return new File(outputDirectory, sb.toString());
     }
 
-    private static String getDependencyId(Artifact artifact, boolean removeVersion, boolean removeType) {
+    private static String getDependencyId(Dependency artifact, boolean removeVersion, boolean removeType) {
         StringBuilder sb = new StringBuilder();
 
         sb.append(artifact.getArtifactId());
 
         if (!removeVersion) {
             sb.append("-");
-            sb.append(artifact.getVersion());
+            sb.append(artifact.getVersion().toString());
         }
 
         if (artifact.getClassifier() != null && !artifact.getClassifier().isEmpty()) {
@@ -194,7 +194,8 @@ public final class DependencyUtil {
         // if the classifier and type are the same (sources), then don't
         // repeat.
         // avoids names like foo-sources-sources
-        if (!removeType && !Objects.equals(artifact.getClassifier(), artifact.getType())) {
+        if (!removeType
+                && !Objects.equals(artifact.getClassifier(), artifact.getType().id())) {
             sb.append("-");
             sb.append(artifact.getType());
         }
@@ -255,8 +256,63 @@ public final class DependencyUtil {
      */
     public static synchronized void log(String string, Log log) throws IOException {
         try (BufferedReader reader = new BufferedReader(new StringReader(string))) {
-            reader.lines().forEach(log::info);
+            reader.lines().forEach(line -> log.info(line));
         }
+    }
+
+    /**
+     * Formats the identifier of a dependency the way Maven 3 did in {@code Artifact#getId()}:
+     * {@code groupId:artifactId:type:[classifier:]version}.
+     *
+     * @param dependency the dependency
+     * @return the identifier
+     */
+    public static String getId(Dependency dependency) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(dependency.getGroupId()).append(':').append(dependency.getArtifactId());
+        sb.append(':').append(dependency.getType().id());
+        if (dependency.getClassifier() != null && !dependency.getClassifier().isEmpty()) {
+            sb.append(':').append(dependency.getClassifier());
+        }
+        sb.append(':').append(dependency.getVersion().toString());
+        return sb.toString();
+    }
+
+    /**
+     * Formats a dependency the way Maven 3 did in {@code Artifact#toString()}:
+     * {@code groupId:artifactId:type[:classifier]:version:scope}.
+     *
+     * @param dependency the dependency
+     * @return the string form
+     */
+    public static String toString(Dependency dependency) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(dependency.getGroupId()).append(':').append(dependency.getArtifactId());
+        sb.append(':').append(dependency.getType().id());
+        if (dependency.getClassifier() != null && !dependency.getClassifier().isEmpty()) {
+            sb.append(':').append(dependency.getClassifier());
+        }
+        sb.append(':').append(dependency.getVersion());
+        if (dependency.getScope() != null) {
+            sb.append(':').append(dependency.getScope().id());
+        }
+        return sb.toString();
+    }
+
+    /**
+     * The Maven 3 {@code Artifact#getDependencyConflictId()}: {@code groupId:artifactId:type[:classifier]}.
+     *
+     * @param dependency the dependency
+     * @return the conflict id
+     */
+    public static String getDependencyConflictId(Dependency dependency) {
+        StringBuilder sb = new StringBuilder();
+        sb.append(dependency.getGroupId()).append(':').append(dependency.getArtifactId());
+        sb.append(':').append(dependency.getType().id());
+        if (dependency.getClassifier() != null && !dependency.getClassifier().isEmpty()) {
+            sb.append(':').append(dependency.getClassifier());
+        }
+        return sb.toString();
     }
 
     /**

@@ -20,13 +20,7 @@ package org.apache.maven.plugins.dependency.fromDependencies;
 
 import java.io.File;
 
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
-import org.sonatype.plexus.build.incremental.BuildContext;
+import org.apache.maven.api.plugin.annotations.Parameter;
 
 /**
  * Abstract Parent class used by mojos that get Artifact information from the project dependencies.
@@ -111,16 +105,6 @@ public abstract class AbstractFromDependenciesMojo extends AbstractDependencyFil
      */
     @Parameter(property = "mdep.failOnMissingClassifierArtifact", defaultValue = "false")
     protected boolean failOnMissingClassifierArtifact;
-
-    protected AbstractFromDependenciesMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder,
-            ArtifactHandlerManager artifactHandlerManager) {
-        super(session, buildContext, project, resolverUtil, projectBuilder, artifactHandlerManager);
-    }
 
     /**
      * @return returns the output directory

@@ -18,8 +18,6 @@
  */
 package org.apache.maven.plugins.dependency.resolvers;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
 import java.lang.reflect.InvocationTargetException;
@@ -33,25 +31,18 @@ import java.util.Set;
 import java.util.jar.JarFile;
 import java.util.jar.Manifest;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.MessageBuilder;
+import org.apache.maven.api.services.MessageBuilderFactory;
 import org.apache.maven.plugins.dependency.utils.DependencyStatusSets;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
 import org.apache.maven.plugins.dependency.utils.filters.ResolveFileFilter;
 import org.apache.maven.plugins.dependency.utils.markers.SourcesFileMarkerHandler;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactsFilter;
-import org.apache.maven.shared.utils.logging.MessageBuilder;
-import org.apache.maven.shared.utils.logging.MessageUtils;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Goal that resolves the project dependencies from the repository. When running on Java 9, the
@@ -60,11 +51,7 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  * @since 2.0
  */
-@Mojo(
-        name = "resolve",
-        requiresDependencyResolution = ResolutionScope.TEST,
-        defaultPhase = LifecyclePhase.GENERATE_SOURCES,
-        threadSafe = true)
+@Mojo(name = "resolve", defaultPhase = "generate-sources")
 public class ResolveDependenciesMojo extends AbstractResolveMojo {
 
     @Parameter(property = "outputEncoding", defaultValue = "${project.reporting.outputEncoding}")
@@ -89,6 +76,8 @@ public class ResolveDependenciesMojo extends AbstractResolveMojo {
     /**
      * Only used to store results for integration test validation.
      */
+    private static final java.util.regex.Pattern ANSI = java.util.regex.Pattern.compile("\u001B\\[[;\\d]*m");
+
     DependencyStatusSets results;
 
     /**
@@ -107,26 +96,13 @@ public class ResolveDependenciesMojo extends AbstractResolveMojo {
     @Parameter(property = "includeParents", defaultValue = "false")
     boolean includeParents;
 
-    @Inject
-    // CHECKSTYLE_OFF: ParameterNumber
-    public ResolveDependenciesMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder,
-            ArtifactHandlerManager artifactHandlerManager) {
-        super(session, buildContext, project, resolverUtil, projectBuilder, artifactHandlerManager);
-    }
-    // CHECKSTYLE_ON: ParameterNumber
-
     /**
      * Main entry into mojo. Gets the list of dependencies and iterates through displaying the resolved version.
      *
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      */
     @Override
-    protected void doExecute() throws MojoExecutionException {
+    protected void doExecute() throws MojoException {
         // get sets of dependencies
         results = this.getDependencySets(false, includeParents);
 
@@ -139,7 +115,7 @@ public class ResolveDependenciesMojo extends AbstractResolveMojo {
                 DependencyUtil.write(output, outputFile, appendOutput, encoding);
             }
         } catch (IOException e) {
-            throw new MojoExecutionException(e.getMessage(), e);
+            throw new MojoException(e.getMessage(), e);
         }
     }
 
@@ -182,7 +158,7 @@ public class ResolveDependenciesMojo extends AbstractResolveMojo {
             sb.append(System.lineSeparator());
             sb.append("The following files were skipped:");
             sb.append(System.lineSeparator());
-            Set<Artifact> skippedDependencies = new LinkedHashSet<>(results.getSkippedDependencies());
+            Set<Dependency> skippedDependencies = new LinkedHashSet<>(results.getSkippedDependencies());
             sb.append(buildArtifactListOutput(
                     skippedDependencies, outputAbsoluteArtifactFilename, theOutputScope, theSort));
         }
@@ -192,7 +168,7 @@ public class ResolveDependenciesMojo extends AbstractResolveMojo {
             sb.append(System.lineSeparator());
             sb.append("The following files have NOT been resolved:");
             sb.append(System.lineSeparator());
-            Set<Artifact> unResolvedDependencies = new LinkedHashSet<>(results.getUnResolvedDependencies());
+            Set<Dependency> unResolvedDependencies = new LinkedHashSet<>(results.getUnResolvedDependencies());
             sb.append(buildArtifactListOutput(
                     unResolvedDependencies, outputAbsoluteArtifactFilename, theOutputScope, theSort));
         }
@@ -202,24 +178,29 @@ public class ResolveDependenciesMojo extends AbstractResolveMojo {
     }
 
     private StringBuilder buildArtifactListOutput(
-            Set<Artifact> artifacts, boolean outputAbsoluteArtifactFilename, boolean theOutputScope, boolean theSort) {
+            Set<Dependency> artifacts,
+            boolean outputAbsoluteArtifactFilename,
+            boolean theOutputScope,
+            boolean theSort) {
         StringBuilder sb = new StringBuilder();
         List<String> artifactStringList = new ArrayList<>();
-        for (Artifact artifact : artifacts) {
-            MessageBuilder messageBuilder = MessageUtils.buffer();
+        for (Dependency dependency : artifacts) {
+            DownloadedDependency artifact = (DownloadedDependency) dependency;
+            MessageBuilder messageBuilder =
+                    session.getService(MessageBuilderFactory.class).builder();
             messageBuilder.a("   ");
 
             if (theOutputScope) {
-                messageBuilder.a(artifact.toString());
+                messageBuilder.a(DependencyUtil.toString(dependency));
             } else {
-                messageBuilder.a(artifact.getId());
+                messageBuilder.a(DependencyUtil.getId(dependency));
             }
 
             if (outputAbsoluteArtifactFilename) {
                 try {
                     // we want to print the absolute file name here
                     String artifactFilename =
-                            artifact.getFile().getAbsoluteFile().getPath();
+                            artifact.getPath().toAbsolutePath().toString();
 
                     messageBuilder.a(':').a(artifactFilename);
                 } catch (NullPointerException e) {
@@ -227,13 +208,14 @@ public class ResolveDependenciesMojo extends AbstractResolveMojo {
                 }
             }
 
-            if (theOutputScope && artifact.isOptional()) {
+            if (theOutputScope && dependency.isOptional()) {
                 messageBuilder.a(" (optional)");
             }
 
             // dependencies:collect won't download jars
-            if (artifact.getFile() != null) {
-                ModuleDescriptor moduleDescriptor = getModuleDescriptor(artifact.getFile());
+            if (artifact.getPath() != null) {
+                ModuleDescriptor moduleDescriptor =
+                        getModuleDescriptor(artifact.getPath().toFile());
                 if (moduleDescriptor != null) {
                     messageBuilder.project(" -- module " + moduleDescriptor.name);
 
@@ -248,7 +230,7 @@ public class ResolveDependenciesMojo extends AbstractResolveMojo {
             }
             String message = messageBuilder.build();
             if (outputFile != null) {
-                message = MessageUtils.stripAnsiCodes(message);
+                message = ANSI.matcher(message).replaceAll("");
             }
             artifactStringList.add(message + System.lineSeparator());
         }

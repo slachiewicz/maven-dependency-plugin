@@ -19,49 +19,48 @@
 package org.apache.maven.plugins.dependency.utils.translators;
 
 import java.util.LinkedHashSet;
+import java.util.Optional;
 import java.util.Set;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.ArtifactHandler;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.plugin.logging.Log;
-import org.eclipse.aether.util.artifact.SubArtifact;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.Type;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.services.TypeRegistry;
 
 /**
+ * Translates the artifacts to artifacts with another classifier and/or type.
+ *
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  */
 public class ClassifierTypeTranslator implements ArtifactTranslator {
-    private final ArtifactHandlerManager artifactHandlerManager;
+    private final Session session;
 
     private String classifier;
 
     private String type;
 
     /**
-     * @param artifactHandlerManager {@link ArtifactHandlerManager}
+     * @param session the session, used to look the types up
      * @param theClassifier the classifier to use
      * @param theType the type
      */
-    public ClassifierTypeTranslator(
-            ArtifactHandlerManager artifactHandlerManager, String theClassifier, String theType) {
-        this.artifactHandlerManager = artifactHandlerManager;
+    public ClassifierTypeTranslator(Session session, String theClassifier, String theType) {
+        this.session = session;
         this.classifier = theClassifier;
         this.type = theType;
     }
 
-    /*
-     * (non-Javadoc)
-     * @see org.apache.mojo.dependency.utils.translators.ArtifactTranslator#translate(java.util.Set,
-     * org.apache.maven.plugin.logging.Log)
-     */
     @Override
-    public Set<org.eclipse.aether.artifact.Artifact> translate(Set<Artifact> artifacts, Log log) {
-        Set<org.eclipse.aether.artifact.Artifact> results;
+    public Set<Artifact> translate(Set<Dependency> artifacts, Log log) {
+        Set<Artifact> results;
 
         log.debug("Translating Artifacts using Classifier: " + this.classifier + " and Type: " + this.type);
+
         results = new LinkedHashSet<>();
-        for (Artifact artifact : artifacts) {
+        TypeRegistry typeRegistry = session.getService(TypeRegistry.class);
+        for (Dependency artifact : artifacts) {
             // this translator must pass both type and classifier here so we
             // will use the
             // base artifact value if null comes in
@@ -69,14 +68,13 @@ public class ClassifierTypeTranslator implements ArtifactTranslator {
             if (this.type != null && !this.type.isEmpty()) {
                 useType = this.type;
             } else {
-                useType = artifact.getType();
+                useType = artifact.getType().id();
             }
 
-            ArtifactHandler artifactHandler = artifactHandlerManager.getArtifactHandler(useType);
-
             final String extension;
-            if (artifactHandler != null) {
-                extension = artifactHandler.getExtension();
+            Optional<Type> resolvedType = typeRegistry.lookup(useType);
+            if (resolvedType.isPresent()) {
+                extension = resolvedType.get().getExtension();
             } else {
                 extension = this.type;
             }
@@ -88,14 +86,20 @@ public class ClassifierTypeTranslator implements ArtifactTranslator {
                 useClassifier = artifact.getClassifier();
             }
 
-            results.add(new SubArtifact(RepositoryUtils.toArtifact(artifact), useClassifier, extension));
+            results.add(session.createArtifact(
+                    artifact.getGroupId(),
+                    artifact.getArtifactId(),
+                    artifact.getVersion().toString(),
+                    useClassifier,
+                    extension,
+                    null));
         }
 
         return results;
     }
 
     /**
-     * @return returns the type
+     * @return the type
      */
     public String getType() {
         return this.type;
@@ -109,7 +113,7 @@ public class ClassifierTypeTranslator implements ArtifactTranslator {
     }
 
     /**
-     * @return returns the classifier
+     * @return the classifier
      */
     public String getClassifier() {
         return this.classifier;

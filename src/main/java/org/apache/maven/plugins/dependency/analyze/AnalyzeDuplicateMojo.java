@@ -18,10 +18,6 @@
  */
 package org.apache.maven.plugins.dependency.analyze;
 
-import javax.inject.Inject;
-
-import java.io.IOException;
-import java.io.Reader;
 import java.util.Collections;
 import java.util.HashSet;
 import java.util.Iterator;
@@ -30,17 +26,17 @@ import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
 
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.Model;
-import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.project.MavenProject;
-import org.codehaus.plexus.util.xml.XmlStreamReader;
-import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.model.Dependency;
+import org.apache.maven.api.model.Model;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.api.services.xml.ModelXmlFactory;
+import org.apache.maven.api.services.xml.XmlReaderRequest;
 
 /**
  * Analyzes the <code>&lt;dependencies/&gt;</code> and <code>&lt;dependencyManagement/&gt;</code> tags in the
@@ -48,8 +44,8 @@ import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
  *
  * @author <a href="mailto:vincent.siveton@gmail.com">Vincent Siveton</a>
  */
-@Mojo(name = "analyze-duplicate", aggregator = false, threadSafe = true)
-public class AnalyzeDuplicateMojo extends AbstractMojo {
+@Mojo(name = "analyze-duplicate")
+public class AnalyzeDuplicateMojo implements org.apache.maven.api.plugin.Mojo {
     public static final String MESSAGE_DUPLICATE_DEP_IN_DEPENDENCIES =
             "List of duplicate dependencies defined in <dependencies/> in your pom.xml:\n";
 
@@ -67,29 +63,34 @@ public class AnalyzeDuplicateMojo extends AbstractMojo {
     /**
      * The Maven project to analyze.
      */
-    private MavenProject project;
+    @Inject
+    private Project project;
 
     @Inject
-    public AnalyzeDuplicateMojo(MavenProject project) {
-        this.project = project;
-    }
+    private Session session;
+
+    @Inject
+    private Log log;
 
     /**
      * {@inheritDoc}
      */
     @Override
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    public void execute() throws MojoException {
         if (skip) {
-            getLog().info("Skipping plugin execution");
+            log.info("Skipping plugin execution");
             return;
         }
 
-        MavenXpp3Reader pomReader = new MavenXpp3Reader();
         Model model;
-        try (Reader reader = new XmlStreamReader(project.getFile())) {
-            model = pomReader.read(reader);
-        } catch (IOException | XmlPullParserException e) {
-            throw new MojoExecutionException("Exception: " + e.getMessage(), e);
+        try {
+            model = session.getService(ModelXmlFactory.class)
+                    .read(XmlReaderRequest.builder()
+                            .path(project.getPomPath())
+                            .strict(false)
+                            .build());
+        } catch (RuntimeException e) {
+            throw new MojoException("Exception: " + e.getMessage(), e);
         }
 
         Set<String> duplicateDependencies = Collections.emptySet();
@@ -104,16 +105,16 @@ public class AnalyzeDuplicateMojo extends AbstractMojo {
                     findDuplicateDependencies(model.getDependencyManagement().getDependencies());
         }
 
-        if (getLog().isInfoEnabled()) {
+        if (log.isInfoEnabled()) {
             StringBuilder sb = new StringBuilder();
 
             createMessage(duplicateDependencies, sb, MESSAGE_DUPLICATE_DEP_IN_DEPENDENCIES);
             createMessage(duplicateDependenciesManagement, sb, MESSAGE_DUPLICATE_DEP_IN_DEPMGMT);
 
             if (sb.length() > 0) {
-                getLog().info(sb.toString());
+                log.info(sb.toString());
             } else {
-                getLog().info("No duplicate dependencies found in <dependencies/> or in <dependencyManagement/>");
+                log.info("No duplicate dependencies found in <dependencies/> or in <dependencyManagement/>");
             }
         }
     }

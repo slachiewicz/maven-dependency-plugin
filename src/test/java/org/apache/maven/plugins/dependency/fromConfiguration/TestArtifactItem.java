@@ -20,8 +20,8 @@ package org.apache.maven.plugins.dependency.fromConfiguration;
 
 import java.io.IOException;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.DefaultArtifact;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
 import org.junit.jupiter.api.Test;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
@@ -30,16 +30,17 @@ class TestArtifactItem {
 
     @Test
     void testArtifactItemConstructor() throws IOException {
-        Artifact artifact = new DefaultArtifact("g", "a", "1.0", Artifact.SCOPE_COMPILE, "jar", "one", null);
+        ResolvedDependency artifact =
+                ResolvedDependency.of(null, DependencyStubs.dependency("g", "a", "1.0", "compile", "jar", "one"), null);
 
         ArtifactItem item = new ArtifactItem(artifact);
 
         assertEquals(item.getArtifact(), artifact);
         assertEquals(item.getArtifactId(), artifact.getArtifactId());
         assertEquals(item.getGroupId(), artifact.getGroupId());
-        assertEquals(item.getVersion(), artifact.getVersion());
+        assertEquals(item.getVersion(), artifact.getVersion().toString());
         assertEquals(item.getClassifier(), artifact.getClassifier());
-        assertEquals(item.getType(), artifact.getType());
+        assertEquals(item.getType(), artifact.getType().id());
     }
 
     @Test

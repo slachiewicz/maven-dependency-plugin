@@ -27,22 +27,24 @@ import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Objects;
 import java.util.Set;
+import java.util.function.Predicate;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DependencyScope;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.annotations.Nullable;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.Mojo;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Parameter;
+import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.apache.maven.shared.artifact.filter.StrictPatternExcludesArtifactFilter;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalysis;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzer;
 import org.apache.maven.shared.dependency.analyzer.ProjectDependencyAnalyzerException;
-import org.codehaus.plexus.PlexusContainer;
-import org.codehaus.plexus.component.repository.exception.ComponentLookupException;
 import org.codehaus.plexus.util.xml.PrettyPrintXMLWriter;
 
 /**
@@ -52,7 +54,7 @@ import org.codehaus.plexus.util.xml.PrettyPrintXMLWriter;
  * @author <a href="mailto:markhobson@gmail.com">Mark Hobson</a>
  * @since 2.0-alpha-5
  */
-public abstract class AbstractAnalyzeMojo extends AbstractMojo {
+public abstract class AbstractAnalyzeMojo implements Mojo {
     // fields -----------------------------------------------------------------
 
     /**
@@ -128,22 +130,6 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
      */
     @Parameter(property = "scriptableFlag", defaultValue = "$$$%%%")
     private String scriptableFlag;
-
-    /**
-     * Flag to use for scriptable output.
-     *
-     * @since 2.0-alpha-5
-     */
-    @Parameter(defaultValue = "${basedir}", readonly = true)
-    private File baseDir;
-
-    /**
-     * Target folder.
-     *
-     * @since 2.0-alpha-5
-     */
-    @Parameter(defaultValue = "${project.build.directory}", readonly = true)
-    private File outputDirectory;
 
     /**
      * Force dependencies as used, to override incomplete result caused by bytecode-level analysis. Dependency format is
@@ -267,16 +253,27 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
      * The plexusContainer to look up the {@link ProjectDependencyAnalyzer} implementation depending on the mojo
      * configuration.
      */
-    private final PlexusContainer plexusContainer;
+    @Inject
+    private Session session;
+
+    @Inject
+    private Project project;
+
+    @Inject
+    private Log log;
 
     /**
-     * The Maven project to analyze.
+     * The analyzers, by role hint.
      */
-    private final MavenProject project;
+    @Inject
+    @Nullable
+    private Map<String, ProjectDependencyAnalyzer> analyzers;
 
-    protected AbstractAnalyzeMojo(PlexusContainer plexusContainer, MavenProject project) {
-        this.plexusContainer = plexusContainer;
-        this.project = project;
+    /**
+     * @return the log
+     */
+    protected Log getLog() {
+        return log;
     }
 
     // Mojo methods -----------------------------------------------------------
@@ -285,18 +282,21 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
      * @see org.apache.maven.plugin.Mojo#execute()
      */
     @Override
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    public void execute() throws MojoException {
         if (isSkip()) {
             getLog().info("Skipping plugin execution");
             return;
         }
 
-        if (ignoredPackagings.contains(project.getPackaging())) {
-            getLog().info("Skipping " + project.getPackaging() + " project");
+        if (ignoredPackagings.contains(project.getPackaging().id())) {
+            getLog().info("Skipping " + project.getPackaging().id() + " project");
             return;
         }
 
-        if (outputDirectory == null || !outputDirectory.exists()) {
+        // the former read-only parameters ${project.build.directory} and ${basedir} do not evaluate in Maven 4
+        String buildDirectory =
+                project.getBuild() == null ? null : project.getBuild().getDirectory();
+        if (buildDirectory == null || !new File(buildDirectory).exists()) {
             getLog().info("Skipping project with no build directory");
             return;
         }
@@ -304,22 +304,25 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
         boolean warning = checkDependencies();
 
         if (warning && failOnWarning) {
-            throw new MojoExecutionException("Dependency problems found");
+            throw new MojoException("Dependency problems found");
         }
     }
 
     /**
      * @return {@link ProjectDependencyAnalyzer}
-     * @throws MojoExecutionException in case of an error
+     * @throws MojoException in case of an error
      */
-    protected ProjectDependencyAnalyzer createProjectDependencyAnalyzer() throws MojoExecutionException {
-
-        try {
-            return plexusContainer.lookup(ProjectDependencyAnalyzer.class, analyzer);
-        } catch (ComponentLookupException exception) {
-            throw new MojoExecutionException(
-                    "Failed to instantiate ProjectDependencyAnalyser" + " / role-hint " + analyzer, exception);
+    protected ProjectDependencyAnalyzer createProjectDependencyAnalyzer() throws MojoException {
+        ProjectDependencyAnalyzer result = analyzers == null ? null : analyzers.get(analyzer);
+        if (result == null && "default".equals(analyzer) && analyzers != null) {
+            // maven-di registers an implementation with a bare @Named under the empty key, not "default"
+            result = analyzers.get("");
         }
+        if (result == null) {
+            throw new MojoException("Failed to instantiate ProjectDependencyAnalyser / role-hint " + analyzer
+                    + ", available: " + (analyzers == null ? "none" : analyzers.keySet()));
+        }
+        return result;
     }
 
     /**
@@ -331,34 +334,34 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
 
     // private methods --------------------------------------------------------
 
-    private boolean checkDependencies() throws MojoExecutionException {
+    private boolean checkDependencies() throws MojoException {
         ProjectDependencyAnalysis analysis;
         try {
-            analysis = createProjectDependencyAnalyzer().analyze(project, excludedClasses);
+            analysis = createProjectDependencyAnalyzer().analyze(session, project, excludedClasses);
 
             if (usedDependencies != null) {
                 analysis = analysis.forceDeclaredDependenciesUsage(usedDependencies);
             }
         } catch (ProjectDependencyAnalyzerException exception) {
-            throw new MojoExecutionException("Cannot analyze dependencies", exception);
+            throw new MojoException("Cannot analyze dependencies", exception);
         }
 
         if (ignoreNonCompile) {
             analysis = analysis.ignoreNonCompile();
         }
 
-        Set<Artifact> usedDeclared = new LinkedHashSet<>(analysis.getUsedDeclaredArtifacts());
-        Map<Artifact, Set<String>> usedUndeclaredWithClasses =
+        Set<Dependency> usedDeclared = new LinkedHashSet<>(analysis.getUsedDeclaredArtifacts());
+        Map<Dependency, Set<String>> usedUndeclaredWithClasses =
                 new LinkedHashMap<>(analysis.getUsedUndeclaredArtifactsWithClasses());
-        Set<Artifact> unusedDeclared = new LinkedHashSet<>(analysis.getUnusedDeclaredArtifacts());
-        Set<Artifact> nonTestScope = new LinkedHashSet<>(analysis.getTestArtifactsWithNonTestScope());
+        Set<Dependency> unusedDeclared = new LinkedHashSet<>(analysis.getUnusedDeclaredArtifacts());
+        Set<Dependency> nonTestScope = new LinkedHashSet<>(analysis.getTestArtifactsWithNonTestScope());
 
-        Set<Artifact> ignoredUsedUndeclared = new LinkedHashSet<>();
-        Set<Artifact> ignoredUnusedDeclared = new LinkedHashSet<>();
-        Set<Artifact> ignoredNonTestScope = new LinkedHashSet<>();
+        Set<Dependency> ignoredUsedUndeclared = new LinkedHashSet<>();
+        Set<Dependency> ignoredUnusedDeclared = new LinkedHashSet<>();
+        Set<Dependency> ignoredNonTestScope = new LinkedHashSet<>();
 
         if (ignoreUnusedRuntime) {
-            filterArtifactsByScope(unusedDeclared, Artifact.SCOPE_RUNTIME);
+            filterArtifactsByScope(unusedDeclared, DependencyScope.RUNTIME);
         }
 
         ignoredUsedUndeclared.addAll(filterDependencies(usedUndeclaredWithClasses.keySet(), ignoredDependencies));
@@ -450,36 +453,30 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
         return warning;
     }
 
-    private void filterArtifactsByScope(Set<Artifact> artifacts, String scope) {
-        artifacts.removeIf(artifact -> Objects.equals(artifact.getScope(), scope));
+    private void filterArtifactsByScope(Set<Dependency> artifacts, DependencyScope scope) {
+        artifacts.removeIf(artifact -> artifact.getScope() == scope);
     }
 
-    private void logArtifacts(Set<Artifact> artifacts, boolean warn) {
+    private void logArtifacts(Set<Dependency> artifacts, boolean warn) {
         if (artifacts.isEmpty()) {
             getLog().info("   None");
         } else {
-            for (Artifact artifact : artifacts) {
-                // called because artifact will set the version to -SNAPSHOT only if I do this. MNG-2961
-                artifact.isSnapshot();
-
+            for (Dependency artifact : artifacts) {
                 if (warn) {
-                    logDependencyWarning("   " + artifact);
+                    logDependencyWarning("   " + DependencyUtil.toString(artifact));
                 } else {
-                    getLog().info("   " + artifact);
+                    getLog().info("   " + DependencyUtil.toString(artifact));
                 }
             }
         }
     }
 
-    private void logArtifacts(Map<Artifact, Set<String>> artifacts) {
+    private void logArtifacts(Map<Dependency, Set<String>> artifacts) {
         if (artifacts.isEmpty()) {
             getLog().info("   None");
         } else {
-            for (Map.Entry<Artifact, Set<String>> entry : artifacts.entrySet()) {
-                // called because artifact will set the version to -SNAPSHOT only if I do this. MNG-2961
-                entry.getKey().isSnapshot();
-
-                logDependencyWarning("   " + entry.getKey());
+            for (Map.Entry<Dependency, Set<String>> entry : artifacts.entrySet()) {
+                logDependencyWarning("   " + DependencyUtil.toString(entry.getKey()));
                 for (String clazz : entry.getValue()) {
                     logDependencyWarning("      class " + clazz);
                 }
@@ -495,14 +492,14 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
         }
     }
 
-    private void writeDependencyXML(Set<Artifact> artifacts) {
+    private void writeDependencyXML(Set<Dependency> artifacts) {
         if (!artifacts.isEmpty()) {
             getLog().info("Add the following to your pom to correct the missing dependencies: ");
 
             StringWriter out = new StringWriter();
             PrettyPrintXMLWriter writer = new PrettyPrintXMLWriter(out);
 
-            for (Artifact artifact : artifacts) {
+            for (Dependency artifact : artifacts) {
                 writer.startElement("dependency");
                 writer.startElement("groupId");
                 writer.writeText(artifact.getGroupId());
@@ -511,7 +508,7 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
                 writer.writeText(artifact.getArtifactId());
                 writer.endElement();
                 writer.startElement("version");
-                writer.writeText(artifact.getBaseVersion());
+                writer.writeText(artifact.getBaseVersion().toString());
                 String classifier = artifact.getClassifier();
                 if (classifier != null && !classifier.trim().isEmpty()) {
                     writer.startElement("classifier");
@@ -520,9 +517,9 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
                 }
                 writer.endElement();
 
-                if (!Artifact.SCOPE_COMPILE.equals(artifact.getScope())) {
+                if (artifact.getScope() != DependencyScope.COMPILE) {
                     writer.startElement("scope");
-                    writer.writeText(artifact.getScope());
+                    writer.writeText(artifact.getScope().id());
                     writer.endElement();
                 }
                 writer.endElement();
@@ -532,27 +529,24 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
         }
     }
 
-    private void writeScriptableOutput(Set<Artifact> artifacts) {
+    private void writeScriptableOutput(Set<Dependency> artifacts) {
         if (!artifacts.isEmpty()) {
             getLog().info("Missing dependencies: ");
-            String pomFile = baseDir.getAbsolutePath() + File.separatorChar + "pom.xml";
+            String pomFile = project.getBasedir().toAbsolutePath() + File.separator + "pom.xml";
             StringBuilder buf = new StringBuilder();
 
-            for (Artifact artifact : artifacts) {
-                // called because artifact will set the version to -SNAPSHOT only if I do this. MNG-2961
-                artifact.isSnapshot();
-
+            for (Dependency artifact : artifacts) {
                 buf.append(scriptableFlag)
                         .append(":")
                         .append(pomFile)
                         .append(":")
-                        .append(artifact.getDependencyConflictId())
+                        .append(DependencyUtil.getDependencyConflictId(artifact))
                         .append(":")
                         .append(artifact.getClassifier() != null ? artifact.getClassifier() : "")
                         .append(":")
                         .append(artifact.getBaseVersion())
                         .append(":")
-                        .append(artifact.getScope())
+                        .append(artifact.getScope().id())
                         .append(System.lineSeparator());
             }
             getLog().info(System.lineSeparator() + buf);
@@ -568,16 +562,16 @@ public abstract class AbstractAnalyzeMojo extends AbstractMojo {
      * @param excludes  exclude patterns, may be null or empty
      * @return the artifacts that were removed from the source set
      */
-    private Set<Artifact> filterDependencies(Set<Artifact> artifacts, String[] excludes) {
+    private Set<Dependency> filterDependencies(Set<Dependency> artifacts, String[] excludes) {
         if (excludes == null || excludes.length == 0) {
             return Collections.emptySet();
         }
-        ArtifactFilter filter = new StrictPatternExcludesArtifactFilter(Arrays.asList(excludes));
-        Set<Artifact> result = new LinkedHashSet<>();
+        Predicate<Dependency> filter = new StrictPatternExcludesArtifactFilter(Arrays.asList(excludes));
+        Set<Dependency> result = new LinkedHashSet<>();
 
-        for (Iterator<Artifact> it = artifacts.iterator(); it.hasNext(); ) {
-            Artifact artifact = it.next();
-            if (!filter.include(artifact)) {
+        for (Iterator<Dependency> it = artifacts.iterator(); it.hasNext(); ) {
+            Dependency artifact = it.next();
+            if (!filter.test(artifact)) {
                 it.remove();
                 result.add(artifact);
             }

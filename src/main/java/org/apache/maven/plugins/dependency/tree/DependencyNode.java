@@ -23,7 +23,8 @@ import java.util.Collections;
 import java.util.List;
 import java.util.function.Predicate;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
 
 /**
  * A node of the dependency tree displayed by the {@link TreeMojo}.
@@ -33,23 +34,35 @@ public class DependencyNode {
 
     private final Artifact artifact;
 
+    private final Dependency dependency;
+
     private final String nodeString;
 
     private List<DependencyNode> children = Collections.emptyList();
 
     /**
      * @param parent the parent node, or <code>null</code> for the root
-     * @param artifact the artifact of this node
+     * @param artifact the artifact of this node, for the root the artifact of the project
+     * @param dependency the dependency of this node, <code>null</code> for the root, which is the project and has no
+     *            dependency in the Maven 4 API
      * @param nodeString the label of this node
      */
-    public DependencyNode(DependencyNode parent, Artifact artifact, String nodeString) {
+    public DependencyNode(DependencyNode parent, Artifact artifact, Dependency dependency, String nodeString) {
         this.parent = parent;
         this.artifact = artifact;
+        this.dependency = dependency;
         this.nodeString = nodeString;
     }
 
     public Artifact getArtifact() {
         return artifact;
+    }
+
+    /**
+     * @return the dependency of this node, or <code>null</code> for the root
+     */
+    public Dependency getDependency() {
+        return dependency;
     }
 
     public DependencyNode getParent() {
@@ -103,7 +116,7 @@ public class DependencyNode {
             return null;
         }
 
-        DependencyNode copy = new DependencyNode(newParent, artifact, nodeString);
+        DependencyNode copy = new DependencyNode(newParent, artifact, dependency, nodeString);
         List<DependencyNode> copiedChildren = new ArrayList<>(children.size());
         for (DependencyNode child : children) {
             DependencyNode copiedChild = child.filter(copy, keep, include);

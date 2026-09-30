@@ -18,93 +18,68 @@
  */
 package org.apache.maven.plugins.dependency.utils;
 
-import javax.inject.Provider;
-
 import java.io.File;
-import java.util.Collections;
+import java.nio.file.Path;
+import java.util.Optional;
 import java.util.stream.Stream;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.handler.DefaultArtifactHandler;
-import org.apache.maven.execution.MavenExecutionRequest;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.project.artifact.ProjectArtifactMetadata;
-import org.eclipse.aether.DefaultRepositorySystemSession;
-import org.eclipse.aether.RepositorySystem;
-import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.artifact.ArtifactType;
-import org.eclipse.aether.artifact.ArtifactTypeRegistry;
-import org.eclipse.aether.artifact.DefaultArtifact;
-import org.eclipse.aether.graph.DependencyFilter;
-import org.eclipse.aether.repository.LocalRepository;
-import org.eclipse.aether.repository.LocalRepositoryManager;
-import org.eclipse.aether.repository.RemoteRepository;
-import org.eclipse.aether.repository.RepositoryPolicy;
-import org.eclipse.aether.resolution.ArtifactDescriptorException;
-import org.eclipse.aether.resolution.ArtifactDescriptorRequest;
-import org.eclipse.aether.resolution.ArtifactDescriptorResult;
-import org.eclipse.aether.resolution.ArtifactRequest;
-import org.eclipse.aether.resolution.ArtifactResult;
-import org.eclipse.aether.resolution.DependencyRequest;
-import org.eclipse.aether.resolution.DependencyResult;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.DownloadedArtifact;
+import org.apache.maven.api.LocalRepository;
+import org.apache.maven.api.ProducedArtifact;
+import org.apache.maven.api.RemoteRepository;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.Type;
+import org.apache.maven.api.model.Repository;
+import org.apache.maven.api.services.TypeRegistry;
+import org.apache.maven.plugins.dependency.testUtils.DependencyStubs;
+import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
-import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
-import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.mockito.junit.jupiter.MockitoSettings;
+import org.mockito.quality.Strictness;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.junit.jupiter.params.provider.Arguments.of;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.argThat;
-import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.mock;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
+@MockitoSettings(strictness = Strictness.LENIENT)
 class ResolverUtilTest {
 
     @Mock
-    private RepositorySystem repositorySystem;
+    private Session session;
 
     @Mock
-    private MavenExecutionRequest executionRequest;
+    private TypeRegistry typeRegistry;
 
     @Mock
-    private RepositorySystemSession repositorySystemSession;
-
-    @Mock
-    private ArtifactTypeRegistry artifactTypeRegistry;
-
-    @Mock
-    private ArtifactType artifactType;
-
-    @Mock
-    private LocalRepositoryManager localRepositoryManager;
-
-    @Mock
-    private DependencyFilter dependencyFilter;
-
-    @Mock
-    private MavenSession mavenSession;
-
-    @Mock
-    private Provider<MavenSession> sessionProvider;
-
-    @InjectMocks
-    private ResolverUtil resolverUtil;
+    private RemoteRepository remoteRepository;
 
     @TempDir
     private File tempDir;
+
+    private ResolverUtil resolverUtil;
+
+    @BeforeEach
+    void setUp() {
+        resolverUtil = new ResolverUtil(session, null);
+        when(session.getService(TypeRegistry.class)).thenReturn(typeRegistry);
+        when(session.createRemoteRepository(any(Repository.class))).thenReturn(remoteRepository);
+    }
 
     public static Stream<Arguments> prepareRepositoryTest() {
 
@@ -132,27 +107,24 @@ class ResolverUtilTest {
     @ParameterizedTest
     @MethodSource
     void prepareRepositoryTest(String repository, String id, String type, String url) {
-        when(sessionProvider.get()).thenReturn(mavenSession);
-        when(mavenSession.getRepositorySession()).thenReturn(repositorySystemSession);
-        when(mavenSession.getRequest()).thenReturn(executionRequest);
-        when(executionRequest.isUpdateSnapshots()).thenReturn(true);
+        RemoteRepository result = resolverUtil.prepareRemoteRepository(repository, "always");
 
-        RemoteRepository remoteRepository = resolverUtil.prepareRemoteRepository(repository);
+        assertThat(result).isSameAs(remoteRepository);
+        ArgumentCaptor<Repository> captor = ArgumentCaptor.forClass(Repository.class);
+        verify(session).createRemoteRepository(captor.capture());
+        Repository prepared = captor.getValue();
+        assertThat(prepared.getId()).isEqualTo(id);
+        assertThat(prepared.getLayout()).isEqualTo(type);
+        assertThat(prepared.getUrl()).isEqualTo(url);
+        assertThat(prepared.getSnapshots().getUpdatePolicy()).isEqualTo("always");
+        assertThat(prepared.getReleases().getUpdatePolicy()).isEqualTo("always");
+    }
 
-        assertThat(remoteRepository).isNotNull();
-        assertThat(remoteRepository.getId()).isEqualTo(id);
-        assertThat(remoteRepository.getContentType()).isEqualTo(type);
-        assertThat(remoteRepository.getUrl()).isEqualTo(url);
-
-        RepositoryPolicy snapshotPolicy = remoteRepository.getPolicy(true);
-        assertThat(snapshotPolicy).isNotNull();
-        assertThat(snapshotPolicy.getUpdatePolicy()).isEqualTo(RepositoryPolicy.UPDATE_POLICY_ALWAYS);
-        assertThat(snapshotPolicy.getChecksumPolicy()).isEqualTo(RepositoryPolicy.CHECKSUM_POLICY_WARN);
-
-        RepositoryPolicy releasePolicy = remoteRepository.getPolicy(true);
-        assertThat(releasePolicy).isNotNull();
-        assertThat(releasePolicy.getUpdatePolicy()).isEqualTo(RepositoryPolicy.UPDATE_POLICY_ALWAYS);
-        assertThat(releasePolicy.getChecksumPolicy()).isEqualTo(RepositoryPolicy.CHECKSUM_POLICY_WARN);
+    @Test
+    void prepareRepositoryWithNull() {
+        assertThatCode(() -> resolverUtil.prepareRemoteRepository(null, null))
+                .isExactlyInstanceOf(NullPointerException.class)
+                .hasMessage("repository must be not null");
     }
 
     @ParameterizedTest
@@ -168,132 +140,98 @@ class ResolverUtilTest {
 
     @Test
     void createArtifactFromShortCoordinatesUsesSeparatePackagingAndClassifier() {
-        prepareArtifactTypeRegistry();
+        prepareTypes();
         ParamArtifact paramArtifact = new ParamArtifact();
         paramArtifact.setArtifact("groupId:artifactId:1.0");
         paramArtifact.setPackaging("test-jar");
         paramArtifact.setClassifier("tests");
 
-        Artifact artifact = resolverUtil.createArtifactFromParams(paramArtifact);
+        resolverUtil.createArtifactFromParams(paramArtifact);
 
-        assertThat(artifact.getExtension()).isEqualTo("jar");
-        assertThat(artifact.getClassifier()).isEqualTo("tests");
-        verify(artifactTypeRegistry).get("test-jar");
+        verify(typeRegistry).require("test-jar");
+        verify(session).createArtifact("groupId", "artifactId", "1.0", "tests", "jar", "test-jar");
     }
 
     @Test
     void createArtifactFromExplicitCoordinatesOverridesSeparatePackagingAndClassifier() {
-        prepareArtifactTypeRegistry();
+        prepareTypes();
         ParamArtifact paramArtifact = new ParamArtifact();
         paramArtifact.setArtifact("groupId:artifactId:1.0:jar:sources");
         paramArtifact.setPackaging("test-jar");
         paramArtifact.setClassifier("tests");
 
-        Artifact artifact = resolverUtil.createArtifactFromParams(paramArtifact);
+        resolverUtil.createArtifactFromParams(paramArtifact);
 
-        assertThat(artifact.getExtension()).isEqualTo("jar");
-        assertThat(artifact.getClassifier()).isEqualTo("sources");
-        verify(artifactTypeRegistry).get("jar");
+        verify(typeRegistry).require("jar");
+        verify(session).createArtifact("groupId", "artifactId", "1.0", "sources", "jar", "jar");
     }
 
     @Test
-    void prepareRepositoryUsesExplicitUpdatePolicy() {
-        when(sessionProvider.get()).thenReturn(mavenSession);
-        when(mavenSession.getRepositorySession()).thenReturn(repositorySystemSession);
+    void createArtifactFromGavDefaultsToJar() {
+        prepareTypes();
+        ParamArtifact paramArtifact = new ParamArtifact();
+        paramArtifact.setGroupId("groupId");
+        paramArtifact.setArtifactId("artifactId");
+        paramArtifact.setVersion("1.0");
 
-        RemoteRepository remoteRepository = resolverUtil.prepareRemoteRepository(
-                "central::https://repo.maven.apache.org", RepositoryPolicy.UPDATE_POLICY_ALWAYS);
+        resolverUtil.createArtifactFromParams(paramArtifact);
 
-        assertThat(remoteRepository.getPolicy(false).getUpdatePolicy())
-                .isEqualTo(RepositoryPolicy.UPDATE_POLICY_ALWAYS);
-        assertThat(remoteRepository.getPolicy(true).getUpdatePolicy()).isEqualTo(RepositoryPolicy.UPDATE_POLICY_ALWAYS);
+        verify(session).createArtifact("groupId", "artifactId", "1.0", null, "jar", "jar");
     }
 
     @Test
-    void prepareRepositoryWithNull() {
-        assertThatCode(() -> resolverUtil.prepareRemoteRepository(null))
-                .isExactlyInstanceOf(NullPointerException.class)
-                .hasMessage("repository must be not null");
+    void installArtifactKeepsTheTimestampedVersion() {
+        Session target = mock(Session.class);
+        ProducedArtifact produced = mock(ProducedArtifact.class);
+        when(target.createProducedArtifact(anyString(), anyString(), anyString(), any(), anyString(), any()))
+                .thenReturn(produced);
+        DownloadedArtifact artifact = mock(DownloadedArtifact.class);
+        Path path = tempDir.toPath().resolve("artifact-1.0-20121003.035531-117.jar");
+        when(artifact.getGroupId()).thenReturn("org.apache.maven.plugins");
+        when(artifact.getArtifactId()).thenReturn("artifact");
+        when(artifact.getVersion()).thenReturn(DependencyStubs.version("1.0-20121003.035531-117"));
+        when(artifact.getClassifier()).thenReturn("");
+        when(artifact.getExtension()).thenReturn("jar");
+        when(artifact.getPath()).thenReturn(path);
+
+        resolverUtil.installArtifact(artifact, target);
+
+        verify(target)
+                .createProducedArtifact(
+                        "org.apache.maven.plugins", "artifact", "1.0-20121003.035531-117", "", "jar", null);
+        verify(target).setArtifactPath(produced, path);
+        verify(target).installArtifacts(produced);
     }
 
     @Test
-    void resolveArtifactWithFallbackWhenDescriptorCannotBeRead() throws Exception {
-        Artifact artifact = new DefaultArtifact("groupId", "artifactId", null, "jar", "1.0");
-        ArtifactDescriptorRequest descriptorRequest = new ArtifactDescriptorRequest();
-        ArtifactDescriptorException descriptorException =
-                new ArtifactDescriptorException(new ArtifactDescriptorResult(descriptorRequest));
-        ArtifactResult artifactResult = new ArtifactResult(new ArtifactRequest()).setArtifact(artifact);
+    void installArtifactWithAnotherVersion() {
+        Session target = mock(Session.class);
+        ProducedArtifact produced = mock(ProducedArtifact.class);
+        when(target.createProducedArtifact(anyString(), anyString(), anyString(), any(), anyString(), any()))
+                .thenReturn(produced);
+        DownloadedArtifact artifact = mock(DownloadedArtifact.class);
+        Path path = tempDir.toPath().resolve("artifact-1.0-20121003.035531-117.jar");
+        when(artifact.getGroupId()).thenReturn("org.apache.maven.plugins");
+        when(artifact.getArtifactId()).thenReturn("artifact");
+        when(artifact.getClassifier()).thenReturn("");
+        when(artifact.getExtension()).thenReturn("jar");
+        when(artifact.getPath()).thenReturn(path);
 
-        when(repositorySystem.readArtifactDescriptor(eq(repositorySystemSession), any(ArtifactDescriptorRequest.class)))
-                .thenThrow(descriptorException);
-        when(repositorySystem.resolveArtifact(eq(repositorySystemSession), any(ArtifactRequest.class)))
-                .thenReturn(artifactResult);
+        resolverUtil.installArtifact(artifact, "1.0-SNAPSHOT", target);
 
-        assertThat(resolverUtil.resolveArtifactWithFallback(artifact, Collections.emptyList(), repositorySystemSession))
-                .isSameAs(artifact);
-        verify(repositorySystem)
-                .readArtifactDescriptor(eq(repositorySystemSession), any(ArtifactDescriptorRequest.class));
-        verify(repositorySystem).resolveArtifact(eq(repositorySystemSession), any(ArtifactRequest.class));
+        verify(target).createProducedArtifact("org.apache.maven.plugins", "artifact", "1.0-SNAPSHOT", "", "jar", null);
+        verify(target).installArtifacts(produced);
     }
 
     @Test
-    void installArtifact() throws Exception {
-        org.apache.maven.artifact.Artifact artifact = new org.apache.maven.artifact.DefaultArtifact(
-                "org.apache.maven.plugins", "artifact", "1.0", null, "jar", null, new DefaultArtifactHandler("jar"));
-        artifact.setFile(new File(tempDir, "artifact-1.0.jar"));
-        Artifact resolverArtifact = RepositoryUtils.toArtifact(artifact);
+    void localRepositorySessionUsesTheDirectory() {
+        LocalRepository localRepository = mock(LocalRepository.class);
+        Session other = mock(Session.class);
+        Path alternate = new File(tempDir, "alternate").toPath();
+        when(session.createLocalRepository(alternate)).thenReturn(localRepository);
+        when(session.withLocalRepository(localRepository)).thenReturn(other);
 
-        resolverUtil.installArtifact(artifact, repositorySystemSession);
-
-        verify(repositorySystem)
-                .install(
-                        eq(repositorySystemSession),
-                        argThat(request -> request.getArtifacts().equals(Collections.singletonList(resolverArtifact))));
-    }
-
-    @Test
-    void installArtifactWithProjectArtifactMetadata() throws Exception {
-        org.apache.maven.artifact.Artifact artifact = new org.apache.maven.artifact.DefaultArtifact(
-                "org.apache.maven.plugins", "artifact", "1.0", null, "jar", null, new DefaultArtifactHandler("jar"));
-        File jar = new File(tempDir, "artifact-1.0.jar");
-        File pom = new File(tempDir, "artifact-1.0.pom");
-        artifact.setFile(jar);
-        artifact.addMetadata(new ProjectArtifactMetadata(artifact, pom));
-
-        resolverUtil.installArtifact(artifact, repositorySystemSession);
-
-        ArgumentCaptor<org.eclipse.aether.installation.InstallRequest> request =
-                ArgumentCaptor.forClass(org.eclipse.aether.installation.InstallRequest.class);
-        verify(repositorySystem).install(eq(repositorySystemSession), request.capture());
-        assertThat(request.getValue().getArtifacts())
-                .hasSize(2)
-                .anySatisfy(installed -> assertThat(installed.getFile()).isEqualTo(jar))
-                .anySatisfy(installed -> {
-                    assertThat(installed.getExtension()).isEqualTo("pom");
-                    assertThat(installed.getFile()).isEqualTo(pom);
-                });
-    }
-
-    @ParameterizedTest
-    @CsvSource({"simple, simple", "enhanced, default"})
-    void localRepositorySessionPreservesRepositoryType(String currentType, String expectedType) {
-        LocalRepository currentRepository = new LocalRepository(tempDir, currentType);
-        LocalRepositoryManager newLocalRepositoryManager = org.mockito.Mockito.mock(LocalRepositoryManager.class);
-        when(sessionProvider.get()).thenReturn(mavenSession);
-        when(mavenSession.getRepositorySession()).thenReturn(repositorySystemSession);
-        when(repositorySystemSession.getLocalRepositoryManager()).thenReturn(localRepositoryManager);
-        when(localRepositoryManager.getRepository()).thenReturn(currentRepository);
-        when(repositorySystem.newLocalRepositoryManager(
-                        any(DefaultRepositorySystemSession.class), any(LocalRepository.class)))
-                .thenReturn(newLocalRepositoryManager);
-
-        RepositorySystemSession result = resolverUtil.localRepositorySession(new File(tempDir, "alternate"));
-
-        assertThat(result.getLocalRepositoryManager()).isSameAs(newLocalRepositoryManager);
-        verify(repositorySystem)
-                .newLocalRepositoryManager(
-                        any(DefaultRepositorySystemSession.class),
-                        argThat(repository -> repository.getContentType().equals(expectedType)));
+        assertThat(resolverUtil.localRepositorySession(alternate.toFile())).isSameAs(other);
     }
 
     @Test
@@ -303,58 +241,14 @@ class ResolverUtilTest {
                 .hasMessage("localRepositoryDirectory");
     }
 
-    @Test
-    void resolveDependenciesForArtifactWithFilter() throws Exception {
-        Artifact rootArtifact = new DefaultArtifact("org.apache.maven.plugins", "artifact", "jar", "1.0");
-        DependencyResult dependencyResult = new DependencyResult(new DependencyRequest());
-        when(sessionProvider.get()).thenReturn(mavenSession);
-        when(mavenSession.getRepositorySession()).thenReturn(repositorySystemSession);
-        when(repositorySystem.resolveDependencies(eq(repositorySystemSession), any(DependencyRequest.class)))
-                .thenReturn(dependencyResult);
-
-        resolverUtil.resolveDependenciesForArtifact(
-                rootArtifact,
-                Collections.emptyList(),
-                Collections.emptyList(),
-                Collections.emptyList(),
-                dependencyFilter);
-
-        verify(repositorySystem)
-                .resolveDependencies(
-                        eq(repositorySystemSession),
-                        argThat(request -> request.getFilter() == dependencyFilter
-                                && request.getCollectRequest().getRootArtifact() == null
-                                && request.getCollectRequest()
-                                        .getRoot()
-                                        .getArtifact()
-                                        .equals(rootArtifact)));
-    }
-
-    @Test
-    void resolveDependenciesForArtifactWithoutFilterDoesNotResolveRoot() throws Exception {
-        Artifact rootArtifact = new DefaultArtifact("org.apache.maven.plugins", "artifact", "jar", "1.0");
-        DependencyResult dependencyResult = new DependencyResult(new DependencyRequest());
-        when(sessionProvider.get()).thenReturn(mavenSession);
-        when(mavenSession.getRepositorySession()).thenReturn(repositorySystemSession);
-        when(repositorySystem.resolveDependencies(eq(repositorySystemSession), any(DependencyRequest.class)))
-                .thenReturn(dependencyResult);
-
-        resolverUtil.resolveDependenciesForArtifact(
-                rootArtifact, Collections.emptyList(), Collections.emptyList(), Collections.emptyList());
-
-        verify(repositorySystem)
-                .resolveDependencies(
-                        eq(repositorySystemSession),
-                        argThat(request -> request.getFilter() == null
-                                && request.getCollectRequest().getRoot() == null
-                                && request.getCollectRequest().getRootArtifact().equals(rootArtifact)));
-    }
-
-    private void prepareArtifactTypeRegistry() {
-        when(sessionProvider.get()).thenReturn(mavenSession);
-        when(mavenSession.getRepositorySession()).thenReturn(repositorySystemSession);
-        when(repositorySystemSession.getArtifactTypeRegistry()).thenReturn(artifactTypeRegistry);
-        when(artifactTypeRegistry.get(any())).thenReturn(artifactType);
-        when(artifactType.getExtension()).thenReturn("jar");
+    private void prepareTypes() {
+        when(typeRegistry.require(anyString())).thenAnswer(invocation -> {
+            String id = invocation.getArgument(0);
+            // test-jar is a jar with a classifier, like in the default type registry
+            return DependencyStubs.type(id, id.equals("test-jar") ? "jar" : id);
+        });
+        when(typeRegistry.lookup(anyString())).thenReturn(Optional.<Type>empty());
+        when(session.createArtifact(anyString(), anyString(), anyString(), any(), anyString(), anyString()))
+                .thenReturn(mock(Artifact.class));
     }
 }

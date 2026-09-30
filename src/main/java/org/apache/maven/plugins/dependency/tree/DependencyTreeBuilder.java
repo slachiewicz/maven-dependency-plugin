@@ -21,183 +21,99 @@ package org.apache.maven.plugins.dependency.tree;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
+import java.util.function.Predicate;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.resolver.filter.ArtifactFilter;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.project.DefaultDependencyResolutionRequest;
-import org.apache.maven.project.DependencyResolutionException;
-import org.apache.maven.project.DependencyResolutionRequest;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectDependenciesResolver;
-import org.eclipse.aether.DefaultRepositorySystemSession;
-import org.eclipse.aether.RepositorySystem;
-import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.artifact.ArtifactTypeRegistry;
-import org.eclipse.aether.collection.CollectRequest;
-import org.eclipse.aether.collection.DependencyCollectionException;
-import org.eclipse.aether.util.artifact.JavaScopes;
-import org.eclipse.aether.util.graph.manager.DependencyManagerUtils;
-import org.eclipse.aether.util.graph.selector.AndDependencySelector;
-import org.eclipse.aether.util.graph.selector.ExclusionDependencySelector;
-import org.eclipse.aether.util.graph.selector.OptionalDependencySelector;
-import org.eclipse.aether.util.graph.transformer.ConflictResolver;
-import org.eclipse.aether.util.graph.transformer.JavaScopeDeriver;
-import org.eclipse.aether.util.graph.transformer.NearestVersionSelector;
-import org.eclipse.aether.util.graph.transformer.SimpleOptionalitySelector;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.Node;
+import org.apache.maven.api.PathScope;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.services.DependencyResolver;
+import org.apache.maven.api.services.DependencyResolverException;
+import org.apache.maven.api.services.DependencyResolverRequest;
+import org.apache.maven.api.services.DependencyResolverResult;
 
 /**
- * Builds the {@link DependencyNode} tree of a project from Maven Resolver's dependency graph.
+ * Builds the {@link DependencyNode} tree of a project from the dependency graph of Maven Resolver, as returned by the
+ * Maven 4 {@link DependencyResolver}.
  * <p>
  * The plain tree is what Maven resolves for the project, so it is consistent with the Maven version running. The
- * verbose tree is collected again with the conflict resolver keeping the omitted nodes.
+ * verbose tree is collected with the resolver keeping the omitted nodes, labelled by the resolver.
  */
 class DependencyTreeBuilder {
-    private final RepositorySystem repositorySystem;
-
-    private final ProjectDependenciesResolver projectDependenciesResolver;
-
-    DependencyTreeBuilder(RepositorySystem repositorySystem, ProjectDependenciesResolver projectDependenciesResolver) {
-        this.repositorySystem = repositorySystem;
-        this.projectDependenciesResolver = projectDependenciesResolver;
-    }
 
     /**
-     * Builds the tree resolved by Maven, without omitted nodes.
+     * Builds the tree of the project.
+     *
+     * @param session the session
+     * @param project the project
+     * @param filter the dependencies to keep together with their descendants, <code>null</code> to keep all
+     * @param verbose whether to include the nodes omitted for duplicates and conflicts, and the managed versions and
+     *            scopes
+     * @return the root node, which is the project
+     * @throws DependencyResolverException if the dependencies cannot be collected
      */
-    DependencyNode build(MavenProject project, RepositorySystemSession session, ArtifactFilter filter)
-            throws DependencyResolutionException {
-        DependencyResolutionRequest request = new DefaultDependencyResolutionRequest();
-        request.setMavenProject(project);
-        request.setRepositorySession(session);
+    DependencyNode build(Session session, Project project, Predicate<Dependency> filter, boolean verbose)
+            throws DependencyResolverException {
         // only collect the graph, do not download the artifacts
-        request.setResolutionFilter((node, parents) -> false);
+        DependencyResolverResult result = session.getService(DependencyResolver.class)
+                .collect(DependencyResolverRequest.builder()
+                        .session(session)
+                        .requestType(DependencyResolverRequest.RequestType.COLLECT)
+                        .project(project)
+                        .pathScope(PathScope.TEST_RUNTIME)
+                        .verbose(verbose)
+                        .build());
 
-        org.eclipse.aether.graph.DependencyNode root =
-                projectDependenciesResolver.resolve(request).getDependencyGraph();
-
-        return buildNode(null, root, project.getArtifact(), filter, false);
+        Artifact rootArtifact = project.getMainArtifact()
+                .map(Artifact.class::cast)
+                .orElseGet(() -> result.getRoot().getArtifact() != null
+                        ? result.getRoot().getArtifact()
+                        : project.getPomArtifact());
+        DependencyNode root = new DependencyNode(null, rootArtifact, null, nodeString(rootArtifact, null));
+        root.setChildren(buildChildren(root, result.getRoot(), filter, verbose));
+        return root;
     }
 
-    /**
-     * Builds the tree including the nodes omitted for duplicates and conflicts, and the managed versions and scopes.
-     */
-    DependencyNode buildVerbose(MavenProject project, RepositorySystemSession repositorySession, ArtifactFilter filter)
-            throws DependencyCollectionException {
-        DefaultRepositorySystemSession session = new DefaultRepositorySystemSession(repositorySession);
-        session.setDependencyGraphTransformer(new ConflictResolver(
-                new NearestVersionSelector(),
-                new VerboseJavaScopeSelector(),
-                new SimpleOptionalitySelector(),
-                new JavaScopeDeriver()));
-        session.setDependencySelector(new AndDependencySelector(
-                new DirectScopeDependencySelector(JavaScopes.TEST),
-                new DirectScopeDependencySelector(JavaScopes.PROVIDED),
-                new OptionalDependencySelector(),
-                new ExclusionDependencySelector()));
-        session.setConfigProperty(ConflictResolver.CONFIG_PROP_VERBOSE, true);
-        session.setConfigProperty(DependencyManagerUtils.CONFIG_PROP_VERBOSE, true);
-
-        ArtifactTypeRegistry stereotypes = session.getArtifactTypeRegistry();
-        CollectRequest collectRequest = new CollectRequest();
-        collectRequest.setRootArtifact(RepositoryUtils.toArtifact(project.getArtifact()));
-        collectRequest.setRepositories(RepositoryUtils.toRepos(project.getRemoteArtifactRepositories()));
-        for (Dependency dependency : project.getDependencies()) {
-            collectRequest.addDependency(RepositoryUtils.toDependency(dependency, stereotypes));
-        }
-        if (project.getDependencyManagement() != null) {
-            for (Dependency dependency : project.getDependencyManagement().getDependencies()) {
-                collectRequest.addManagedDependency(RepositoryUtils.toDependency(dependency, stereotypes));
-            }
-        }
-
-        org.eclipse.aether.graph.DependencyNode root =
-                repositorySystem.collectDependencies(session, collectRequest).getRoot();
-
-        return buildNode(null, root, project.getArtifact(), filter, true);
-    }
-
-    private DependencyNode buildNode(
-            DependencyNode parent,
-            org.eclipse.aether.graph.DependencyNode node,
-            Artifact artifact,
-            ArtifactFilter filter,
-            boolean verbose) {
+    private DependencyNode buildNode(DependencyNode parent, Node node, Predicate<Dependency> filter, boolean verbose) {
+        Dependency dependency = node.getDependency();
+        Artifact artifact = dependency != null ? dependency : node.getArtifact();
         DependencyNode current = new DependencyNode(
-                parent, artifact, verbose ? verboseNodeString(node, artifact) : nodeString(artifact));
-
-        List<DependencyNode> children = new ArrayList<>(node.getChildren().size());
-        for (org.eclipse.aether.graph.DependencyNode child : node.getChildren()) {
-            Artifact childArtifact = toArtifact(child.getDependency());
-
-            if (filter == null || filter.include(childArtifact)) {
-                children.add(buildNode(current, child, childArtifact, filter, verbose));
-            }
-        }
-        current.setChildren(Collections.unmodifiableList(children));
-
+                parent, artifact, dependency, verbose ? node.asString() : nodeString(artifact, dependency));
+        current.setChildren(buildChildren(current, node, filter, verbose));
         return current;
     }
 
-    private static Artifact toArtifact(org.eclipse.aether.graph.Dependency dependency) {
-        Artifact artifact = RepositoryUtils.toArtifact(dependency.getArtifact());
-        artifact.setScope(dependency.getScope());
-        artifact.setOptional(dependency.isOptional());
-        return artifact;
-    }
-
-    private static String nodeString(Artifact artifact) {
-        return artifact + (artifact.isOptional() ? " (optional)" : "");
-    }
-
-    private static String verboseNodeString(org.eclipse.aether.graph.DependencyNode node, Artifact artifact) {
-        org.eclipse.aether.graph.DependencyNode winner =
-                (org.eclipse.aether.graph.DependencyNode) node.getData().get(ConflictResolver.NODE_DATA_WINNER);
-        String winnerVersion = null;
-        String ignoredScope = null;
-        if (winner != null) {
-            winnerVersion = winner.getArtifact().getBaseVersion();
-        } else {
-            ignoredScope = (String) node.getData().get(VerboseJavaScopeSelector.REDUCED_SCOPE);
+    private List<DependencyNode> buildChildren(
+            DependencyNode parent, Node node, Predicate<Dependency> filter, boolean verbose) {
+        List<DependencyNode> children = new ArrayList<>(node.getChildren().size());
+        for (Node child : node.getChildren()) {
+            Dependency dependency = child.getDependency();
+            if (filter == null || dependency == null || filter.test(dependency)) {
+                children.add(buildNode(parent, child, filter, verbose));
+            }
         }
+        return Collections.unmodifiableList(children);
+    }
 
-        boolean included = winnerVersion == null;
-
+    private static String nodeString(Artifact artifact, Dependency dependency) {
         StringBuilder buffer = new StringBuilder();
-        if (!included) {
-            buffer.append('(');
+        buffer.append(artifact.getGroupId())
+                .append(':')
+                .append(artifact.getArtifactId())
+                .append(':')
+                .append(dependency != null ? dependency.getType().id() : artifact.getExtension());
+        if (!artifact.getClassifier().isEmpty()) {
+            buffer.append(':').append(artifact.getClassifier());
         }
-        buffer.append(artifact);
-
-        List<String> items = new ArrayList<>();
-        String premanagedVersion = DependencyManagerUtils.getPremanagedVersion(node);
-        if (premanagedVersion != null) {
-            items.add("version managed from " + premanagedVersion);
+        buffer.append(':').append(artifact.getVersion());
+        if (dependency != null) {
+            buffer.append(':').append(dependency.getScope().id());
+            if (dependency.isOptional()) {
+                buffer.append(" (optional)");
+            }
         }
-        String premanagedScope = DependencyManagerUtils.getPremanagedScope(node);
-        if (premanagedScope != null) {
-            items.add("scope managed from " + premanagedScope);
-        }
-        if (ignoredScope != null) {
-            items.add("scope not updated to " + ignoredScope);
-        }
-        if (!included) {
-            items.add(
-                    winnerVersion.equals(artifact.getVersion())
-                            ? "omitted for duplicate"
-                            : "omitted for conflict with " + winnerVersion);
-        }
-
-        if (!items.isEmpty()) {
-            buffer.append(included ? " (" : " - ")
-                    .append(String.join("; ", items))
-                    .append(included ? ")" : "");
-        }
-        if (!included) {
-            buffer.append(')');
-        }
-
         return buffer.toString();
     }
 }

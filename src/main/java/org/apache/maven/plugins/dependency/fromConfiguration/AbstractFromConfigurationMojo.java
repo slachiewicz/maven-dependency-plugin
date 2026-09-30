@@ -24,30 +24,18 @@ import java.util.List;
 import java.util.Objects;
 
 import org.apache.commons.lang3.StringUtils;
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.ArtifactHandler;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.DependencyCoordinates;
+import org.apache.maven.api.DownloadedArtifact;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.AbstractDependencyMojo;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
 import org.apache.maven.plugins.dependency.utils.filters.ArtifactItemFilter;
-import org.apache.maven.project.MavenProject;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactFilterException;
-import org.eclipse.aether.DefaultRepositoryCache;
-import org.eclipse.aether.DefaultRepositorySystemSession;
-import org.eclipse.aether.RepositorySystem;
-import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.artifact.DefaultArtifact;
-import org.eclipse.aether.repository.LocalRepository;
-import org.eclipse.aether.repository.LocalRepositoryManager;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Abstract parent class used by mojos that get Artifact information from the plugin configuration as an ArrayList of
@@ -117,35 +105,16 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
     @Parameter
     private File localRepositoryDirectory;
 
-    private final ArtifactHandlerManager artifactHandlerManager;
-
-    private final RepositorySystem repositorySystem;
-
-    private final ResolverUtil resolverUtil;
-
-    protected AbstractFromConfigurationMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ArtifactHandlerManager artifactHandlerManager,
-            RepositorySystem repositorySystem,
-            ResolverUtil resolverUtil) {
-        super(session, buildContext, project);
-        this.artifactHandlerManager = artifactHandlerManager;
-        this.repositorySystem = repositorySystem;
-        this.resolverUtil = resolverUtil;
-    }
-
     abstract ArtifactItemFilter getMarkedArtifactFilter(ArtifactItem item);
 
     /**
      * ArtifactItems is filled by either field injection or by setArtifact().
      *
-     * @throws MojoFailureException in case of an error
+     * @throws MojoException in case of an error
      */
-    protected void verifyRequirements() throws MojoFailureException {
+    protected void verifyRequirements() throws MojoException {
         if (artifactItems == null || artifactItems.isEmpty()) {
-            throw new MojoFailureException("Either artifact or artifactItems is required ");
+            throw new MojoException("Either artifact or artifactItems is required ");
         }
     }
 
@@ -155,11 +124,11 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
      *
      * @param processArtifactItemsRequest preprocessing instructions
      * @return an ArrayList of preprocessed ArtifactItems
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      * @see ArtifactItem
      */
     protected List<ArtifactItem> getProcessedArtifactItems(ProcessArtifactItemsRequest processArtifactItemsRequest)
-            throws MojoExecutionException {
+            throws MojoException {
 
         boolean removeVersion = processArtifactItemsRequest.isRemoveVersion();
         boolean prependGroupId = processArtifactItemsRequest.isPrependGroupId();
@@ -168,7 +137,7 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
         boolean removeClassifier = processArtifactItemsRequest.isRemoveClassifier();
 
         if (artifactItems == null || artifactItems.isEmpty()) {
-            throw new MojoExecutionException("There are no artifactItems configured.");
+            throw new MojoException("There are no artifactItems configured.");
         }
 
         for (ArtifactItem artifactItem : artifactItems) {
@@ -195,7 +164,7 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
             try {
                 artifactItem.setNeedsProcessing(checkIfProcessingNeeded(artifactItem));
             } catch (ArtifactFilterException e) {
-                throw new MojoExecutionException(e.getMessage(), e);
+                throw new MojoException(e.getMessage(), e);
             }
         }
         return artifactItems;
@@ -206,24 +175,13 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
                 || getMarkedArtifactFilter(item).isArtifactIncluded(item);
     }
 
-    private RepositorySystemSession createSystemSessionForLocalRepo() {
-        RepositorySystemSession repositorySystemSession = session.getRepositorySession();
+    private Session createSessionForLocalRepo() {
         if (localRepositoryDirectory != null) {
-            // "clone" repository session and replace localRepository
-            DefaultRepositorySystemSession newSession =
-                    new DefaultRepositorySystemSession(session.getRepositorySession());
-            // Clear cache, since we're using a new local repository
-            newSession.setCache(new DefaultRepositoryCache());
-            LocalRepositoryManager localRepositoryManager = repositorySystem.newLocalRepositoryManager(
-                    newSession, new LocalRepository(localRepositoryDirectory));
-
-            newSession.setLocalRepositoryManager(localRepositoryManager);
-            repositorySystemSession = newSession;
-            getLog().debug("localRepoPath: "
-                    + localRepositoryManager.getRepository().getBasedir());
+            // "clone" the session and replace the local repository
+            getLog().debug("localRepoPath: " + localRepositoryDirectory);
+            return session.withLocalRepository(session.createLocalRepository(localRepositoryDirectory.toPath()));
         }
-
-        return repositorySystemSession;
+        return session;
     }
 
     /**
@@ -232,35 +190,26 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
      *
      * @param artifactItem containing information about artifact from plugin configuration
      * @return artifact object representing the specified file
-     * @throws MojoExecutionException if the version can't be found in DependencyManagement
+     * @throws MojoException if the version can't be found in DependencyManagement
      */
-    protected Artifact getArtifact(ArtifactItem artifactItem) throws MojoExecutionException {
-
+    protected ResolvedDependency getArtifact(ArtifactItem artifactItem) throws MojoException {
         try {
-            final String extension;
-
-            ArtifactHandler artifactHandler = artifactHandlerManager.getArtifactHandler(artifactItem.getType());
-            if (artifactHandler != null) {
-                extension = artifactHandler.getExtension();
-            } else {
-                extension = artifactItem.getType();
-            }
-
-            DefaultArtifact artifact = new DefaultArtifact(
+            Session repositorySession = createSessionForLocalRepo();
+            Artifact artifact = repositorySession.createArtifact(
                     artifactItem.getGroupId(),
                     artifactItem.getArtifactId(),
+                    artifactItem.getVersion(),
                     artifactItem.getClassifier(),
-                    extension,
-                    artifactItem.getVersion());
+                    null,
+                    artifactItem.getType());
 
-            RepositorySystemSession repositorySession = createSystemSessionForLocalRepo();
-
-            org.eclipse.aether.artifact.Artifact resolvedArtifact = resolverUtil.resolveArtifactWithFallback(
-                    artifact, getProject().getRemoteProjectRepositories(), repositorySession);
-            return RepositoryUtils.toArtifact(resolvedArtifact);
-
-        } catch (ArtifactResolutionException e) {
-            throw new MojoExecutionException("Unable to find/resolve artifact.", e);
+            DownloadedArtifact resolvedArtifact = getResolverUtil()
+                    .resolveArtifactWithFallback(
+                            artifact, getResolverUtil().getProjectRepositories(), repositorySession);
+            return ResolvedDependency.of(
+                    session, resolvedArtifact, artifactItem.getType(), null, resolvedArtifact.getPath());
+        } catch (RuntimeException e) {
+            throw new MojoException("Unable to find/resolve artifact.", e);
         }
     }
 
@@ -270,20 +219,19 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
      * doesn't find a match, it will try again looking for artifactId and groupId only.
      *
      * @param artifact representing configured file
-     * @throws MojoExecutionException
+     * @throws MojoException
      */
-    private void fillMissingArtifactVersion(ArtifactItem artifact) throws MojoExecutionException {
-        MavenProject project = getProject();
-        List<Dependency> deps = project.getDependencies();
-        List<Dependency> depMngt = project.getDependencyManagement() == null
-                ? Collections.emptyList()
-                : project.getDependencyManagement().getDependencies();
+    private void fillMissingArtifactVersion(ArtifactItem artifact) throws MojoException {
+        Project project = getProject();
+        List<DependencyCoordinates> deps = project == null ? Collections.emptyList() : project.getDependencies();
+        List<DependencyCoordinates> depMngt =
+                project == null ? Collections.emptyList() : project.getManagedDependencies();
 
         if (!findDependencyVersion(artifact, deps, false)
-                && (project.getDependencyManagement() == null || !findDependencyVersion(artifact, depMngt, false))
+                && !findDependencyVersion(artifact, depMngt, false)
                 && !findDependencyVersion(artifact, deps, true)
-                && (project.getDependencyManagement() == null || !findDependencyVersion(artifact, depMngt, true))) {
-            throw new MojoExecutionException("Unable to find artifact version of " + artifact.getGroupId() + ":"
+                && !findDependencyVersion(artifact, depMngt, true)) {
+            throw new MojoException("Unable to find artifact version of " + artifact.getGroupId() + ":"
                     + artifact.getArtifactId() + " in either dependency list or in project's dependency management.");
         }
     }
@@ -297,13 +245,18 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
      * @param looseMatch only look at artifactId and groupId
      * @return the found dependency
      */
-    private boolean findDependencyVersion(ArtifactItem artifact, List<Dependency> dependencies, boolean looseMatch) {
-        for (Dependency dependency : dependencies) {
+    private boolean findDependencyVersion(
+            ArtifactItem artifact, List<DependencyCoordinates> dependencies, boolean looseMatch) {
+        for (DependencyCoordinates dependency : dependencies) {
+            String depClassifier = dependency.getClassifier();
+            if (depClassifier != null && depClassifier.isEmpty()) {
+                depClassifier = null;
+            }
             if (Objects.equals(dependency.getArtifactId(), artifact.getArtifactId())
                     && Objects.equals(dependency.getGroupId(), artifact.getGroupId())
-                    && (looseMatch || Objects.equals(dependency.getClassifier(), artifact.getClassifier()))
-                    && (looseMatch || Objects.equals(dependency.getType(), artifact.getType()))) {
-                artifact.setVersion(dependency.getVersion());
+                    && (looseMatch || Objects.equals(depClassifier, artifact.getClassifier()))
+                    && (looseMatch || Objects.equals(dependency.getType().id(), artifact.getType()))) {
+                artifact.setVersion(dependency.getVersionConstraint().toString());
 
                 return true;
             }
@@ -391,15 +344,15 @@ public abstract class AbstractFromConfigurationMojo extends AbstractDependencyMo
 
     /**
      * @param artifact the artifact
-     * @throws MojoFailureException in case of an error
+     * @throws MojoException in case of an error
      */
-    public void setArtifact(String artifact) throws MojoFailureException {
+    public void setArtifact(String artifact) throws MojoException {
         if (artifact != null) {
             String packaging = "jar";
             String classifier;
             String[] tokens = StringUtils.split(artifact, ":");
             if (tokens.length < 3 || tokens.length > 5) {
-                throw new MojoFailureException("Invalid artifact, "
+                throw new MojoException("Invalid artifact, "
                         + "you must specify groupId:artifactId:version[:packaging[:classifier]] " + artifact);
             }
             String groupId = tokens[0];

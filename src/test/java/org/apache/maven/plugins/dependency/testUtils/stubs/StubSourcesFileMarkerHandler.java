@@ -20,12 +20,13 @@ package org.apache.maven.plugins.dependency.testUtils.stubs;
 
 import java.io.File;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 import org.apache.maven.plugins.dependency.utils.markers.SourcesFileMarkerHandler;
 
 public class StubSourcesFileMarkerHandler extends SourcesFileMarkerHandler {
 
-    public StubSourcesFileMarkerHandler(Artifact artifact, File markerFilesDirectory, boolean resolved) {
+    public StubSourcesFileMarkerHandler(DownloadedDependency artifact, File markerFilesDirectory, boolean resolved) {
         super(artifact, markerFilesDirectory, resolved);
     }
 
@@ -38,6 +39,6 @@ public class StubSourcesFileMarkerHandler extends SourcesFileMarkerHandler {
         }
 
         return new StubMarkerFile(
-                this.markerFilesDirectory, this.artifact.getId().replace(':', '-') + suffix);
+                this.markerFilesDirectory, DependencyUtil.getId(this.artifact).replace(':', '-') + suffix);
     }
 }

@@ -18,37 +18,28 @@
  */
 package org.apache.maven.plugins.dependency.fromDependencies;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.artifact.handler.manager.ArtifactHandlerManager;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.LifecyclePhase;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.annotations.ResolutionScope;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedArtifact;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.RemoteRepository;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.utils.CopyUtil;
 import org.apache.maven.plugins.dependency.utils.DependencyStatusSets;
 import org.apache.maven.plugins.dependency.utils.DependencyUtil;
-import org.apache.maven.plugins.dependency.utils.ResolverUtil;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
 import org.apache.maven.plugins.dependency.utils.filters.DestFileFilter;
-import org.apache.maven.project.MavenProject;
-import org.apache.maven.project.ProjectBuilder;
 import org.apache.maven.shared.artifact.filter.collection.ArtifactsFilter;
-import org.eclipse.aether.RepositorySystemSession;
-import org.eclipse.aether.installation.InstallationException;
-import org.eclipse.aether.resolution.ArtifactDescriptorException;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
-import org.eclipse.aether.util.artifact.SubArtifact;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Goal that copies the files for a project's dependencies from the repository to a directory.
@@ -59,11 +50,7 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  * @since 1.0
  */
-@Mojo(
-        name = "copy-dependencies",
-        requiresDependencyResolution = ResolutionScope.TEST,
-        defaultPhase = LifecyclePhase.PROCESS_SOURCES,
-        threadSafe = true)
+@Mojo(name = "copy-dependencies", defaultPhase = "process-sources")
 public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
     /**
      * Also copy the pom of each artifact.
@@ -72,8 +59,6 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
      */
     @Parameter(property = "mdep.copyPom", defaultValue = "false")
     protected boolean copyPom;
-
-    private final CopyUtil copyUtil;
 
     /**
      * Either append the artifact's baseVersion or uniqueVersion to the filename. Will only be used if
@@ -102,34 +87,24 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
     @Parameter(property = "mdep.copySignatures", defaultValue = "false")
     protected boolean copySignatures;
 
-    @Inject
-    public CopyDependenciesMojo(
-            MavenSession session,
-            BuildContext buildContext,
-            MavenProject project,
-            ResolverUtil resolverUtil,
-            ProjectBuilder projectBuilder,
-            ArtifactHandlerManager artifactHandlerManager,
-            CopyUtil copyUtil) {
-        super(session, buildContext, project, resolverUtil, projectBuilder, artifactHandlerManager);
-        this.copyUtil = copyUtil;
-    }
+    private CopyUtil copyUtil;
 
     /**
      * Main entry into mojo. Gets the list of dependencies and iterates through calling copyArtifact.
      *
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      * @see #getDependencySets(boolean, boolean)
-     * @see #copyArtifact(Artifact, boolean, boolean, boolean, boolean)
+     * @see #copyArtifact(DownloadedDependency, boolean, boolean, boolean, boolean)
      */
     @Override
-    protected void doExecute() throws MojoExecutionException {
+    protected void doExecute() throws MojoException {
+        copyUtil = new CopyUtil(getLog());
         DependencyStatusSets dss = getDependencySets(this.failOnMissingClassifierArtifact, addParentPoms);
-        Set<Artifact> artifacts = dss.getResolvedDependencies();
+        Set<Dependency> artifacts = dss.getResolvedDependencies();
 
         if (!useRepositoryLayout) {
             Map<String, Integer> copies = new HashMap<>();
-            for (Artifact artifactItem : artifacts) {
+            for (Dependency artifactItem : artifacts) {
                 String destFileName = DependencyUtil.getFormattedFileName(
                         artifactItem, stripVersion, prependGroupId, useBaseVersion, stripClassifier);
                 int numCopies = copies.getOrDefault(destFileName, 0);
@@ -143,19 +118,23 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
                 }
             }
 
-            for (Artifact artifact : artifacts) {
+            for (Dependency artifact : artifacts) {
                 copyArtifact(
-                        artifact, isStripVersion(), this.prependGroupId, this.useBaseVersion, this.stripClassifier);
+                        (DownloadedDependency) artifact,
+                        isStripVersion(),
+                        this.prependGroupId,
+                        this.useBaseVersion,
+                        this.stripClassifier);
             }
         } else {
-            RepositorySystemSession repositorySystemSession = getResolverUtil().localRepositorySession(outputDirectory);
+            Session repositorySession = getResolverUtil().localRepositorySession(outputDirectory);
 
-            artifacts.forEach(artifact -> installArtifact(artifact, repositorySystemSession));
+            artifacts.forEach(artifact -> installArtifact((DownloadedDependency) artifact, repositorySession));
         }
 
-        Set<Artifact> skippedArtifacts = dss.getSkippedDependencies();
-        for (Artifact artifact : skippedArtifacts) {
-            getLog().info(artifact.getId() + " already exists in destination.");
+        Set<Dependency> skippedArtifacts = dss.getSkippedDependencies();
+        for (Dependency artifact : skippedArtifacts) {
+            getLog().info(DependencyUtil.getId(artifact) + " already exists in destination.");
         }
 
         if (isCopyPom() && !useRepositoryLayout) {
@@ -168,35 +147,29 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
     /**
      * Install the artifact and the corresponding pom if copyPoms=true.
      */
-    private void installArtifact(Artifact artifact, RepositorySystemSession repositorySystemSession) {
+    private void installArtifact(DownloadedDependency artifact, Session repositorySession) {
         try {
-            getResolverUtil().installArtifact(artifact, repositorySystemSession);
-            installBaseSnapshot(artifact, repositorySystemSession);
+            getResolverUtil().installArtifact(artifact, repositorySession);
+            installBaseSnapshot(artifact, repositorySession);
 
-            if (!"pom".equals(artifact.getType()) && isCopyPom()) {
-                Artifact pomArtifact = getResolvedPomArtifact(artifact);
+            if (!"pom".equals(artifact.getType().id()) && isCopyPom()) {
+                DownloadedDependency pomArtifact = getResolvedPomArtifact(artifact);
                 if (pomArtifact != null
-                        && pomArtifact.getFile() != null
-                        && pomArtifact.getFile().exists()) {
-                    getResolverUtil().installArtifact(pomArtifact, repositorySystemSession);
-                    installBaseSnapshot(pomArtifact, repositorySystemSession);
+                        && pomArtifact.getPath() != null
+                        && pomArtifact.getPath().toFile().exists()) {
+                    getResolverUtil().installArtifact(pomArtifact, repositorySession);
+                    installBaseSnapshot(pomArtifact, repositorySession);
                 }
             }
-        } catch (InstallationException e) {
+        } catch (RuntimeException e) {
             getLog().warn("unable to install " + artifact, e);
         }
     }
 
-    private void installBaseSnapshot(Artifact artifact, RepositorySystemSession repositorySystemSession)
-            throws InstallationException {
+    private void installBaseSnapshot(DownloadedDependency artifact, Session repositorySession) {
         if (artifact.isSnapshot() && !artifact.getBaseVersion().equals(artifact.getVersion())) {
-            String version = artifact.getVersion();
-            try {
-                artifact.setVersion(artifact.getBaseVersion());
-                getResolverUtil().installArtifact(artifact, repositorySystemSession);
-            } finally {
-                artifact.setVersion(version);
-            }
+            getResolverUtil()
+                    .installArtifact(artifact, artifact.getBaseVersion().toString(), repositorySession);
         }
     }
 
@@ -208,12 +181,12 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
      * @param removeVersion specifies if the version should be removed from the file name when copying
      * @param prependGroupId specifies if the group ID should be prefixed to the file while copying
      * @param theUseBaseVersion specifies if the baseVersion of the artifact should be used instead of the version
-     * @throws MojoExecutionException with a message if an error occurs
-     * @see #copyArtifact(Artifact, boolean, boolean, boolean, boolean)
+     * @throws MojoException with a message if an error occurs
+     * @see #copyArtifact(DownloadedDependency, boolean, boolean, boolean, boolean)
      */
     protected void copyArtifact(
-            Artifact artifact, boolean removeVersion, boolean prependGroupId, boolean theUseBaseVersion)
-            throws MojoExecutionException {
+            DownloadedDependency artifact, boolean removeVersion, boolean prependGroupId, boolean theUseBaseVersion)
+            throws MojoException {
         copyArtifact(artifact, removeVersion, prependGroupId, theUseBaseVersion, false);
     }
 
@@ -228,17 +201,17 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
      * @param prependGroupId specifies if the groupId should be prefixed to the file while copying
      * @param useBaseVersion specifies if the baseVersion of the artifact should be used instead of the version
      * @param removeClassifier specifies if the classifier should be removed from the file name when copying
-     * @throws MojoExecutionException with a message if an error occurs
-     * @see CopyUtil#copyArtifactFile(Artifact, File)
-     * @see DependencyUtil#getFormattedOutputDirectory(boolean, boolean, boolean, boolean, boolean, boolean, File, Artifact)
+     * @throws MojoException with a message if an error occurs
+     * @see CopyUtil#copyArtifactFile(DownloadedDependency, File)
+     * @see DependencyUtil#getFormattedOutputDirectory(boolean, boolean, boolean, boolean, boolean, boolean, File, Dependency)
      */
     protected void copyArtifact(
-            Artifact artifact,
+            DownloadedDependency artifact,
             boolean removeVersion,
             boolean prependGroupId,
             boolean useBaseVersion,
             boolean removeClassifier)
-            throws MojoExecutionException {
+            throws MojoException {
 
         String destFileName = DependencyUtil.getFormattedFileName(
                 artifact, removeVersion, prependGroupId, useBaseVersion, removeClassifier);
@@ -265,8 +238,8 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
             }
 
         } catch (IOException e) {
-            throw new MojoExecutionException(
-                    "Failed to copy artifact '" + artifact + "' (" + artifact.getFile() + ") to " + destFile, e);
+            throw new MojoException(
+                    "Failed to copy artifact '" + artifact + "' (" + artifact.getPath() + ") to " + destFile, e);
         }
     }
 
@@ -278,18 +251,22 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
      * @param destDir the destination directory
      * @param destFileName the destination file name without the extension
      */
-    private void copySignatureFile(Artifact artifact, File destDir, String destFileName) {
-        File signatureFile = new File(artifact.getFile().getAbsolutePath() + SIGNATURE_EXTENSION);
+    private void copySignatureFile(DownloadedDependency artifact, File destDir, String destFileName) {
+        File signatureFile = new File(artifact.getPath().toAbsolutePath() + SIGNATURE_EXTENSION);
 
         if (!signatureFile.exists()) {
             try {
-                org.eclipse.aether.artifact.Artifact aArtifact = RepositoryUtils.toArtifact(artifact);
-                org.eclipse.aether.artifact.Artifact aSignatureArtifact =
-                        new SubArtifact(aArtifact, null, "jar" + SIGNATURE_EXTENSION);
-                org.eclipse.aether.artifact.Artifact resolvedSignature = getResolverUtil()
-                        .resolveArtifact(aSignatureArtifact, getProject().getRemoteProjectRepositories());
-                signatureFile = resolvedSignature.getFile();
-            } catch (ArtifactResolutionException | ArtifactDescriptorException e) {
+                Artifact signatureArtifact = session.createArtifact(
+                        artifact.getGroupId(),
+                        artifact.getArtifactId(),
+                        artifact.getVersion().toString(),
+                        artifact.getClassifier(),
+                        "jar" + SIGNATURE_EXTENSION,
+                        null);
+                DownloadedArtifact resolvedSignature = getResolverUtil()
+                        .resolveArtifact(signatureArtifact, getResolverUtil().getProjectRepositories());
+                signatureFile = resolvedSignature.getPath().toFile();
+            } catch (RuntimeException e) {
                 getLog().warn("Failed to resolve signature file for artifact: " + artifact, e);
             }
         }
@@ -310,11 +287,11 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
      * Copy the pom files associated with the artifacts.
      *
      * @param destDir the destination directory {@link File}
-     * @param artifacts the artifacts {@link Artifact}
+     * @param artifacts the artifacts {@link Dependency}
      * @param removeVersion remove version or not
-     * @throws MojoExecutionException in case of errors
+     * @throws MojoException in case of errors
      */
-    public void copyPoms(File destDir, Set<Artifact> artifacts, boolean removeVersion) throws MojoExecutionException {
+    public void copyPoms(File destDir, Set<Dependency> artifacts, boolean removeVersion) throws MojoException {
 
         copyPoms(destDir, artifacts, removeVersion, false);
     }
@@ -323,27 +300,27 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
      * Copy the pom files associated with the artifacts.
      *
      * @param destDir the destination directory {@link File}
-     * @param artifacts the artifacts {@link Artifact}
+     * @param artifacts the artifacts {@link Dependency}
      * @param removeVersion remove version or not
      * @param removeClassifier remove the classifier or not
-     * @throws MojoExecutionException in case of errors
+     * @throws MojoException in case of errors
      */
-    public void copyPoms(File destDir, Set<Artifact> artifacts, boolean removeVersion, boolean removeClassifier)
-            throws MojoExecutionException {
+    public void copyPoms(File destDir, Set<Dependency> artifacts, boolean removeVersion, boolean removeClassifier)
+            throws MojoException {
         copyPoms(destDir, artifacts, removeVersion, removeClassifier, false);
     }
 
     private void copyPoms(
-            File destDir, Set<Artifact> artifacts, boolean removeVersion, boolean removeClassifier, boolean overwrite)
-            throws MojoExecutionException {
+            File destDir, Set<Dependency> artifacts, boolean removeVersion, boolean removeClassifier, boolean overwrite)
+            throws MojoException {
 
-        for (Artifact artifact : artifacts) {
-            Artifact pomArtifact = getResolvedPomArtifact(artifact);
+        for (Dependency artifact : artifacts) {
+            DownloadedDependency pomArtifact = getResolvedPomArtifact(artifact);
 
             // Copy the pom
             if (pomArtifact != null
-                    && pomArtifact.getFile() != null
-                    && pomArtifact.getFile().exists()) {
+                    && pomArtifact.getPath() != null
+                    && pomArtifact.getPath().toFile().exists()) {
                 File pomDestFile = new File(
                         destDir,
                         DependencyUtil.getFormattedFileName(
@@ -352,8 +329,8 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
                     try {
                         copyUtil.copyArtifactFile(pomArtifact, pomDestFile);
                     } catch (IOException e) {
-                        throw new MojoExecutionException(
-                                "Failed to copy artifact '" + pomArtifact + "' (" + pomArtifact.getFile() + ") to "
+                        throw new MojoException(
+                                "Failed to copy artifact '" + pomArtifact + "' (" + pomArtifact.getPath() + ") to "
                                         + pomDestFile,
                                 e);
                     }
@@ -363,20 +340,25 @@ public class CopyDependenciesMojo extends AbstractFromDependenciesMojo {
     }
 
     /**
-     * @param artifact {@link Artifact}
-     * @return {@link Artifact}
+     * @param artifact {@link Dependency}
+     * @return the resolved pom of the artifact, {@code null} if it cannot be resolved
      */
-    protected Artifact getResolvedPomArtifact(Artifact artifact) {
+    protected DownloadedDependency getResolvedPomArtifact(Dependency artifact) {
 
-        Artifact pomArtifact = null;
+        DownloadedDependency pomArtifact = null;
         // Resolve the pom artifact using repos
         try {
-            org.eclipse.aether.artifact.Artifact aArtifact = RepositoryUtils.toArtifact(artifact);
-            org.eclipse.aether.artifact.Artifact aPomArtifact = new SubArtifact(aArtifact, null, "pom");
-            org.eclipse.aether.artifact.Artifact resolvedPom =
-                    getResolverUtil().resolveArtifact(aPomArtifact, getProject().getRemoteProjectRepositories());
-            pomArtifact = RepositoryUtils.toArtifact(resolvedPom);
-        } catch (ArtifactResolutionException | ArtifactDescriptorException e) {
+            Artifact pom = session.createArtifact(
+                    artifact.getGroupId(),
+                    artifact.getArtifactId(),
+                    artifact.getVersion().toString(),
+                    "",
+                    "pom",
+                    null);
+            List<RemoteRepository> repositories = getResolverUtil().getProjectRepositories();
+            DownloadedArtifact resolvedPom = getResolverUtil().resolveArtifact(pom, repositories);
+            pomArtifact = ResolvedDependency.of(session, resolvedPom, "pom", null, resolvedPom.getPath());
+        } catch (RuntimeException e) {
             getLog().info(e.getMessage());
         }
         return pomArtifact;

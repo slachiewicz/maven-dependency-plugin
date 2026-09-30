@@ -22,8 +22,9 @@ import java.io.File;
 import java.util.HashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Dependency;
 import org.apache.maven.plugins.dependency.testUtils.DependencyArtifactStubFactory;
+import org.apache.maven.plugins.dependency.utils.ResolvedDependency;
 import org.apache.maven.plugins.dependency.utils.markers.DefaultFileMarkerHandler;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -37,7 +38,7 @@ import static org.junit.jupiter.api.Assertions.assertTrue;
  * @author brianf
  */
 class TestMarkerFileFilter {
-    Set<Artifact> artifacts = new HashSet<>();
+    Set<Dependency> artifacts = new HashSet<>();
 
     @TempDir
     File outputFolder;
@@ -53,7 +54,7 @@ class TestMarkerFileFilter {
     @Test
     void markerFile() throws Exception {
         MarkerFileFilter filter = new MarkerFileFilter(true, true, false, new DefaultFileMarkerHandler(outputFolder));
-        Set<Artifact> result = filter.filter(artifacts);
+        Set<Dependency> result = filter.filter(artifacts);
         assertEquals(2, result.size());
 
         filter.setOverWriteReleases(false);
@@ -68,7 +69,7 @@ class TestMarkerFileFilter {
         handler.setMarker();
 
         MarkerFileFilter filter = new MarkerFileFilter(true, false, false, new DefaultFileMarkerHandler(outputFolder));
-        Set<Artifact> result = filter.filter(artifacts);
+        Set<Dependency> result = filter.filter(artifacts);
         assertEquals(1, result.size());
 
         filter.setOverWriteSnapshots(true);
@@ -83,7 +84,7 @@ class TestMarkerFileFilter {
         handler.setMarker();
 
         MarkerFileFilter filter = new MarkerFileFilter(false, false, false, new DefaultFileMarkerHandler(outputFolder));
-        Set<Artifact> result = filter.filter(artifacts);
+        Set<Dependency> result = filter.filter(artifacts);
         assertEquals(1, result.size());
 
         filter.setOverWriteReleases(true);
@@ -98,16 +99,17 @@ class TestMarkerFileFilter {
         // filter includes release artifact because no marker present
         // filter includes snapshot artifact because it is newer than marker
         DependencyArtifactStubFactory fileFact = new DependencyArtifactStubFactory(outputFolder, true);
-        Artifact snap = fileFact.getSnapshotArtifact();
-        Artifact release = fileFact.getReleaseArtifact();
-        Set<Artifact> tempArtifacts = new HashSet<>();
+        ResolvedDependency snap = fileFact.getSnapshotArtifact();
+        ResolvedDependency release = fileFact.getReleaseArtifact();
+        Set<Dependency> tempArtifacts = new HashSet<>();
         tempArtifacts.add(snap);
         tempArtifacts.add(release);
         DefaultFileMarkerHandler handler = new DefaultFileMarkerHandler(snap, outputFolder);
         handler.setMarker();
-        assertTrue(snap.getFile().setLastModified(snap.getFile().lastModified() + 1500));
+        assertTrue(
+                snap.getPath().toFile().setLastModified(snap.getPath().toFile().lastModified() + 1500));
         MarkerFileFilter filter = new MarkerFileFilter(false, false, true, new DefaultFileMarkerHandler(outputFolder));
-        Set<Artifact> result = filter.filter(tempArtifacts);
+        Set<Dependency> result = filter.filter(tempArtifacts);
         assertEquals(2, result.size());
 
         // update marker; filter won't include snapshot because timestamps equal
@@ -116,15 +118,16 @@ class TestMarkerFileFilter {
         assertEquals(1, result.size());
 
         // filter won't include snapshot because it is older than marker
-        assertTrue(snap.getFile().setLastModified(snap.getFile().lastModified() - 10000));
+        assertTrue(
+                snap.getPath().toFile().setLastModified(snap.getPath().toFile().lastModified() - 10000));
 
         result = filter.filter(tempArtifacts);
         assertEquals(1, result.size());
 
         assertTrue(handler.clearMarker());
         assertFalse(handler.isMarkerSet());
-        snap.getFile().delete();
-        release.getFile().delete();
+        snap.getPath().toFile().delete();
+        release.getPath().toFile().delete();
     }
 
     @Test

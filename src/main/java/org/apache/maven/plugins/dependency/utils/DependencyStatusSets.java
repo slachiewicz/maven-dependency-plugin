@@ -21,17 +21,17 @@ package org.apache.maven.plugins.dependency.utils;
 import java.util.LinkedHashSet;
 import java.util.Set;
 
-import org.apache.maven.artifact.Artifact;
+import org.apache.maven.api.Dependency;
 
 /**
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  */
 public class DependencyStatusSets {
-    Set<Artifact> resolvedDependencies = null;
+    Set<Dependency> resolvedDependencies = null;
 
-    Set<Artifact> unResolvedDependencies = null;
+    Set<Dependency> unResolvedDependencies = null;
 
-    Set<Artifact> skippedDependencies = null;
+    Set<Dependency> skippedDependencies = null;
 
     /**
      * Default ctor.
@@ -39,11 +39,11 @@ public class DependencyStatusSets {
     public DependencyStatusSets() {}
 
     /**
-     * @param resolved set of {@link Artifact}
-     * @param unResolved set of {@link Artifact}
-     * @param skipped set of {@link Artifact}
+     * @param resolved set of {@link Dependency}
+     * @param unResolved set of {@link Dependency}
+     * @param skipped set of {@link Dependency}
      */
-    public DependencyStatusSets(Set<Artifact> resolved, Set<Artifact> unResolved, Set<Artifact> skipped) {
+    public DependencyStatusSets(Set<Dependency> resolved, Set<Dependency> unResolved, Set<Dependency> skipped) {
         if (resolved != null) {
             this.resolvedDependencies = new LinkedHashSet<>(resolved);
         }
@@ -58,14 +58,14 @@ public class DependencyStatusSets {
     /**
      * @return returns the resolvedDependencies
      */
-    public Set<Artifact> getResolvedDependencies() {
+    public Set<Dependency> getResolvedDependencies() {
         return this.resolvedDependencies;
     }
 
     /**
      * @param resolvedDependencies the resolvedDependencies to set
      */
-    public void setResolvedDependencies(Set<Artifact> resolvedDependencies) {
+    public void setResolvedDependencies(Set<Dependency> resolvedDependencies) {
         if (resolvedDependencies != null) {
             this.resolvedDependencies = new LinkedHashSet<>(resolvedDependencies);
         } else {
@@ -76,14 +76,14 @@ public class DependencyStatusSets {
     /**
      * @return returns the skippedDependencies
      */
-    public Set<Artifact> getSkippedDependencies() {
+    public Set<Dependency> getSkippedDependencies() {
         return this.skippedDependencies;
     }
 
     /**
      * @param skippedDependencies the skippedDependencies to set
      */
-    public void setSkippedDependencies(Set<Artifact> skippedDependencies) {
+    public void setSkippedDependencies(Set<Dependency> skippedDependencies) {
         if (skippedDependencies != null) {
             this.skippedDependencies = new LinkedHashSet<>(skippedDependencies);
         } else {
@@ -94,14 +94,14 @@ public class DependencyStatusSets {
     /**
      * @return returns the unResolvedDependencies
      */
-    public Set<Artifact> getUnResolvedDependencies() {
+    public Set<Dependency> getUnResolvedDependencies() {
         return this.unResolvedDependencies;
     }
 
     /**
      * @param unResolvedDependencies the unResolvedDependencies to set
      */
-    public void setUnResolvedDependencies(Set<Artifact> unResolvedDependencies) {
+    public void setUnResolvedDependencies(Set<Dependency> unResolvedDependencies) {
         if (unResolvedDependencies != null) {
             this.unResolvedDependencies = new LinkedHashSet<>(unResolvedDependencies);
         } else {

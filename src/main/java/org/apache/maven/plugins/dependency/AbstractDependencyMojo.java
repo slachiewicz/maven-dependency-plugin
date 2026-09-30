@@ -18,30 +18,37 @@
  */
 package org.apache.maven.plugins.dependency;
 
-import java.util.List;
-
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.DependencyManagement;
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugin.logging.SystemStreamLog;
-import org.apache.maven.plugins.annotations.Parameter;
-import org.apache.maven.plugins.dependency.pom.DependencyEntry;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.annotations.Nullable;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.Mojo;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.utils.DependencySilentLog;
-import org.apache.maven.project.MavenProject;
-import org.sonatype.plexus.build.incremental.BuildContext;
+import org.apache.maven.plugins.dependency.utils.ResolverUtil;
 
 /**
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  */
-public abstract class AbstractDependencyMojo extends AbstractMojo {
+public abstract class AbstractDependencyMojo implements Mojo {
 
     /**
      * The Maven session.
      */
-    protected final MavenSession session;
+    @Inject
+    protected Session session;
+
+    @Inject
+    private Log log;
+
+    /**
+     * POM, {@code null} if the goal is run outside of a project.
+     */
+    @Inject
+    @Nullable
+    private Project project;
 
     /**
      * If the plugin should be silent.
@@ -62,7 +69,8 @@ public abstract class AbstractDependencyMojo extends AbstractMojo {
     private boolean skip;
 
     /**
-     * Skip plugin execution only during incremental builds (e.g. triggered from M2E).
+     * Skip plugin execution only during incremental builds (e.g. triggered from M2E). The Maven 4 API has no
+     * {@code BuildContext}, so this flag is accepted for compatibility but has no effect.
      *
      * @see #skip
      * @since 3.4.0
@@ -70,29 +78,10 @@ public abstract class AbstractDependencyMojo extends AbstractMojo {
     @Parameter(defaultValue = "false")
     private boolean skipDuringIncrementalBuild;
 
-    /**
-     * For IDE build support.
-     */
-    private final BuildContext buildContext;
-
-    /**
-     * POM.
-     */
-    private final MavenProject project;
-
-    protected AbstractDependencyMojo(MavenSession session, BuildContext buildContext, MavenProject project) {
-        this.session = session;
-        this.buildContext = buildContext;
-        this.project = project;
-    }
-
     // Mojo methods -----------------------------------------------------------
 
-    /*
-     * @see org.apache.maven.plugin.Mojo#execute()
-     */
     @Override
-    public final void execute() throws MojoExecutionException, MojoFailureException {
+    public final void execute() throws MojoException {
         if (isSkip()) {
             getLog().info("Skipping plugin execution");
             return;
@@ -102,25 +91,49 @@ public abstract class AbstractDependencyMojo extends AbstractMojo {
     }
 
     /**
-     * @throws MojoExecutionException {@link MojoExecutionException}
-     * @throws MojoFailureException {@link MojoFailureException}
+     * @throws MojoException in case of an error
      */
-    protected abstract void doExecute() throws MojoExecutionException, MojoFailureException;
+    protected abstract void doExecute() throws MojoException;
 
     /**
-     * @return returns the project
+     * @return returns the project, or {@code null} if the goal is run outside of a project
      */
-    public MavenProject getProject() {
+    public Project getProject() {
         return this.project;
     }
+
+    /**
+     * @return the session
+     */
+    public Session getSession() {
+        return session;
+    }
+
+    /**
+     * @return the helper used to resolve artifacts and dependencies
+     */
+    protected ResolverUtil getResolverUtil() {
+        if (resolverUtil == null) {
+            resolverUtil = new ResolverUtil(session, project);
+        }
+        return resolverUtil;
+    }
+
+    /**
+     * @return the log, which discards everything if {@link #silent} is set
+     */
+    public Log getLog() {
+        return silent ? SILENT : log;
+    }
+
+    private ResolverUtil resolverUtil;
+
+    private static final Log SILENT = new DependencySilentLog();
 
     /**
      * @return {@link #skip}
      */
     public boolean isSkip() {
-        if (skipDuringIncrementalBuild && buildContext.isIncremental()) {
-            return true;
-        }
         return skip;
     }
 
@@ -147,44 +160,5 @@ public abstract class AbstractDependencyMojo extends AbstractMojo {
     @Deprecated
     public void setSilent(boolean silent) {
         this.silent = silent;
-        if (silent) {
-            setLog(new DependencySilentLog());
-        } else if (getLog() instanceof DependencySilentLog) {
-            setLog(new SystemStreamLog());
-        }
-    }
-
-    /**
-     * Checks whether the dependency exists in the project's declared (original) model
-     * after property interpolation, but before inheritance merging.
-     * This catches dependencies declared with property references like {@code ${project.groupId}}
-     * without false-positiving on inherited dependencies from a parent POM.
-     */
-    protected static boolean existsInResolvedModel(MavenProject project, DependencyEntry coords, boolean managed) {
-        List<Dependency> deps;
-        org.apache.maven.model.Model originalModel = project.getOriginalModel();
-        if (managed) {
-            DependencyManagement depMgmt = originalModel != null ? originalModel.getDependencyManagement() : null;
-            deps = depMgmt != null ? depMgmt.getDependencies() : null;
-        } else {
-            deps = originalModel != null ? originalModel.getDependencies() : null;
-        }
-        if (deps == null) {
-            return false;
-        }
-        String searchType = (coords.getType() != null && !coords.getType().isEmpty()) ? coords.getType() : "jar";
-        String searchClassifier =
-                (coords.getClassifier() != null && !coords.getClassifier().isEmpty()) ? coords.getClassifier() : "";
-        for (Dependency dep : deps) {
-            if (coords.getGroupId().equals(dep.getGroupId())
-                    && coords.getArtifactId().equals(dep.getArtifactId())) {
-                String depType = dep.getType() != null ? dep.getType() : "jar";
-                String depClassifier = dep.getClassifier() != null ? dep.getClassifier() : "";
-                if (searchType.equals(depType) && searchClassifier.equals(depClassifier)) {
-                    return true;
-                }
-            }
-        }
-        return false;
     }
 }

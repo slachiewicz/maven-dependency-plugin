@@ -23,9 +23,8 @@ import java.util.Set;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
-import org.apache.maven.artifact.ArtifactUtils;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.model.Dependency;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
@@ -38,15 +37,15 @@ public class ExcludeReactorProjectsDependencyFilter implements Predicate<Depende
     private final Logger log = LoggerFactory.getLogger(ExcludeReactorProjectsDependencyFilter.class);
     private final Set<String> reactorArtifactKeys;
 
-    public ExcludeReactorProjectsDependencyFilter(final List<MavenProject> reactorProjects) {
+    public ExcludeReactorProjectsDependencyFilter(final List<Project> reactorProjects) {
         this.reactorArtifactKeys = reactorProjects.stream()
-                .map(project -> ArtifactUtils.key(project.getArtifact()))
+                .map(project -> project.getGroupId() + ":" + project.getArtifactId() + ":" + project.getVersion())
                 .collect(Collectors.toSet());
     }
 
     @Override
     public boolean test(Dependency dependency) {
-        String key = ArtifactUtils.key(dependency.getGroupId(), dependency.getArtifactId(), dependency.getVersion());
+        String key = dependency.getGroupId() + ":" + dependency.getArtifactId() + ":" + dependency.getVersion();
         if (reactorArtifactKeys.contains(key)) {
             if (log.isDebugEnabled()) {
                 log.debug("Skipped dependency {} because it is present in the reactor", key);

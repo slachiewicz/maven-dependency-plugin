@@ -21,8 +21,9 @@ package org.apache.maven.plugins.dependency.utils.markers;
 import java.io.File;
 import java.io.IOException;
 
-import org.apache.maven.artifact.Artifact;
-import org.apache.maven.plugin.MojoExecutionException;
+import org.apache.maven.api.DownloadedDependency;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.plugins.dependency.utils.DependencyUtil;
 
 /**
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
@@ -39,11 +40,11 @@ public class SourcesFileMarkerHandler extends DefaultFileMarkerHandler {
     }
 
     /**
-     * @param artifact {@link Artifact}
+     * @param artifact {@link DownloadedDependency}
      * @param markerFilesDirectory marker files directory
      * @param isResolved true/false
      */
-    public SourcesFileMarkerHandler(Artifact artifact, File markerFilesDirectory, boolean isResolved) {
+    public SourcesFileMarkerHandler(DownloadedDependency artifact, File markerFilesDirectory, boolean isResolved) {
         super(artifact, markerFilesDirectory);
         this.resolved = isResolved;
     }
@@ -72,7 +73,8 @@ public class SourcesFileMarkerHandler extends DefaultFileMarkerHandler {
             suffix = ".unresolved";
         }
 
-        return new File(this.markerFilesDirectory, this.artifact.getId().replace(':', '-') + suffix);
+        return new File(
+                this.markerFilesDirectory, DependencyUtil.getId(this.artifact).replace(':', '-') + suffix);
     }
 
     /**
@@ -80,12 +82,12 @@ public class SourcesFileMarkerHandler extends DefaultFileMarkerHandler {
      *
      * @return <code>true</code> if and only if the file or directory denoted by this abstract pathname exists;
      *         <code>false</code> otherwise
-     * @throws MojoExecutionException if a security manager exists and its <code>{@link
+     * @throws MojoException if a security manager exists and its <code>{@link
      *          java.lang.SecurityManager#checkRead(java.lang.String)}</code> method denies read access to the file or
      *             directory
      */
     @Override
-    public boolean isMarkerSet() throws MojoExecutionException {
+    public boolean isMarkerSet() throws MojoException {
         File marker = getMarkerFile();
 
         File marker2 = getMarkerFile(!this.resolved);
@@ -94,14 +96,14 @@ public class SourcesFileMarkerHandler extends DefaultFileMarkerHandler {
     }
 
     @Override
-    public boolean isMarkerOlder(Artifact theArtifact) throws MojoExecutionException {
+    public boolean isMarkerOlder(DownloadedDependency theArtifact) throws MojoException {
         File marker = getMarkerFile();
         if (marker.exists()) {
-            return theArtifact.getFile().lastModified() > marker.lastModified();
+            return theArtifact.getPath().toFile().lastModified() > marker.lastModified();
         } else {
             marker = getMarkerFile(!this.resolved);
             if (marker.exists()) {
-                return theArtifact.getFile().lastModified() > marker.lastModified();
+                return theArtifact.getPath().toFile().lastModified() > marker.lastModified();
             } else {
                 // if the marker doesn't exist, we want to copy so assume it is
                 // infinitely older
@@ -111,7 +113,7 @@ public class SourcesFileMarkerHandler extends DefaultFileMarkerHandler {
     }
 
     @Override
-    public void setMarker() throws MojoExecutionException {
+    public void setMarker() throws MojoException {
         File marker = getMarkerFile();
 
         // get the other file if it exists.
@@ -132,7 +134,7 @@ public class SourcesFileMarkerHandler extends DefaultFileMarkerHandler {
                 }
             }
         } catch (IOException e) {
-            throw new MojoExecutionException("Unable to create Marker: " + marker.getAbsolutePath(), e);
+            throw new MojoException("Unable to create Marker: " + marker.getAbsolutePath(), e);
         }
     }
 
@@ -146,7 +148,7 @@ public class SourcesFileMarkerHandler extends DefaultFileMarkerHandler {
      *          java.lang.SecurityManager#checkDelete}</code> method denies delete access to the file
      */
     @Override
-    public boolean clearMarker() throws MojoExecutionException {
+    public boolean clearMarker() throws MojoException {
         File marker = getMarkerFile();
         File marker2 = getMarkerFile(!this.resolved);
         boolean markResult = marker.delete();

@@ -18,43 +18,46 @@
  */
 package org.apache.maven.plugins.dependency;
 
-import javax.inject.Inject;
-
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.Path;
 import java.util.Enumeration;
 import java.util.List;
+import java.util.Map;
 import java.util.jar.JarEntry;
 import java.util.jar.JarFile;
 
-import org.apache.maven.plugin.AbstractMojo;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.api.Artifact;
+import org.apache.maven.api.Dependency;
+import org.apache.maven.api.DownloadedArtifact;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.annotations.Nullable;
+import org.apache.maven.api.di.Inject;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.utils.ParamArtifact;
 import org.apache.maven.plugins.dependency.utils.ResolverUtil;
-import org.eclipse.aether.artifact.Artifact;
-import org.eclipse.aether.resolution.ArtifactDescriptorException;
-import org.eclipse.aether.resolution.ArtifactResolutionException;
-import org.eclipse.aether.resolution.DependencyResolutionException;
 
 /**
  * Retrieves and lists all classes contained in the specified artifact from the specified remote repositories.
  *
  * @since 3.1.3
  */
-@Mojo(name = "list-classes", requiresProject = false, threadSafe = true)
-public class ListClassesMojo extends AbstractMojo {
-
-    private final ResolverUtil resolverUtil;
-
-    private ParamArtifact paramArtifact = new ParamArtifact();
+@Mojo(name = "list-classes", projectRequired = false)
+public class ListClassesMojo implements org.apache.maven.api.plugin.Mojo {
 
     @Inject
-    public ListClassesMojo(ResolverUtil resolverUtil) {
-        this.resolverUtil = resolverUtil;
-    }
+    private Session session;
+
+    @Inject
+    private Log log;
+
+    @Inject
+    @Nullable
+    private Project project;
 
     /**
      * The group ID of the artifact to download. Ignored if {@code artifact} is used.
@@ -62,8 +65,13 @@ public class ListClassesMojo extends AbstractMojo {
      * @since 3.1.3
      */
     @Parameter(property = "groupId")
+    private String groupId;
+
+    /**
+     * @param groupId the value to set
+     */
     public void setGroupId(String groupId) {
-        paramArtifact.setGroupId(groupId);
+        this.groupId = groupId;
     }
 
     /**
@@ -72,8 +80,13 @@ public class ListClassesMojo extends AbstractMojo {
      * @since 3.1.3
      */
     @Parameter(property = "artifactId")
+    private String artifactId;
+
+    /**
+     * @param artifactId the value to set
+     */
     public void setArtifactId(String artifactId) {
-        paramArtifact.setArtifactId(artifactId);
+        this.artifactId = artifactId;
     }
 
     /**
@@ -82,8 +95,13 @@ public class ListClassesMojo extends AbstractMojo {
      * @since 3.1.3
      */
     @Parameter(property = "version")
+    private String version;
+
+    /**
+     * @param version the value to set
+     */
     public void setVersion(String version) {
-        paramArtifact.setVersion(version);
+        this.version = version;
     }
 
     /**
@@ -92,8 +110,13 @@ public class ListClassesMojo extends AbstractMojo {
      * @since 3.1.3
      */
     @Parameter(property = "classifier")
+    private String classifier;
+
+    /**
+     * @param classifier the value to set
+     */
     public void setClassifier(String classifier) {
-        paramArtifact.setClassifier(classifier);
+        this.classifier = classifier;
     }
 
     /**
@@ -102,8 +125,13 @@ public class ListClassesMojo extends AbstractMojo {
      * @since 3.1.3
      */
     @Parameter(property = "packaging", defaultValue = "jar")
+    private String packaging;
+
+    /**
+     * @param packaging the value to set
+     */
     public void setPackaging(String packaging) {
-        paramArtifact.setPackaging(packaging);
+        this.packaging = packaging;
     }
 
     /**
@@ -112,8 +140,13 @@ public class ListClassesMojo extends AbstractMojo {
      * @since 3.1.3
      */
     @Parameter(property = "artifact")
+    private String artifact;
+
+    /**
+     * @param artifact the value to set
+     */
     public void setArtifact(String artifact) {
-        paramArtifact.setArtifact(artifact);
+        this.artifact = artifact;
     }
 
     /**
@@ -144,38 +177,44 @@ public class ListClassesMojo extends AbstractMojo {
     private boolean skip;
 
     @Override
-    public void execute() throws MojoExecutionException, MojoFailureException {
+    public void execute() throws MojoException {
         if (skip) {
-            getLog().info("Skipping plugin execution");
+            log.info("Skipping plugin execution");
             return;
         }
 
+        ParamArtifact paramArtifact = new ParamArtifact();
+        paramArtifact.setGroupId(groupId);
+        paramArtifact.setArtifactId(artifactId);
+        paramArtifact.setVersion(version);
+        paramArtifact.setClassifier(classifier);
+        paramArtifact.setPackaging(packaging);
+        paramArtifact.setArtifact(artifact);
+
         if (!paramArtifact.isDataSet()) {
-            throw new MojoExecutionException("You must specify an artifact OR GAV separately, "
+            throw new MojoException("You must specify an artifact OR GAV separately, "
                     + "e.g. -Dartifact=org.apache.maven.plugins:maven-downloader-plugin:1.0 OR "
                     + "-DgroupId=org.apache.maven.plugins -DartifactId=maven-downloader-plugin -Dversion=1.0");
         }
 
-        Artifact artifact = resolverUtil.createArtifactFromParams(paramArtifact);
+        ResolverUtil resolverUtil = new ResolverUtil(session, project);
+        Artifact resolved = resolverUtil.createArtifactFromParams(paramArtifact);
 
         try {
             if (transitive) {
-                List<Artifact> artifacts =
-                        resolverUtil.resolveDependencies(artifact, resolverUtil.remoteRepositories(remoteRepositories));
+                Map<Dependency, Path> artifacts =
+                        resolverUtil.resolveDependencies(resolved, resolverUtil.remoteRepositories(remoteRepositories));
 
-                for (Artifact a : artifacts) {
-                    printClassesFromArtifactResult(a.getFile());
+                for (Path a : artifacts.values()) {
+                    printClassesFromArtifactResult(a.toFile());
                 }
             } else {
-                Artifact a =
-                        resolverUtil.resolveArtifact(artifact, resolverUtil.remoteRepositories(remoteRepositories));
-                printClassesFromArtifactResult(a.getFile());
+                DownloadedArtifact a =
+                        resolverUtil.resolveArtifact(resolved, resolverUtil.remoteRepositories(remoteRepositories));
+                printClassesFromArtifactResult(a.getPath().toFile());
             }
-        } catch (IOException
-                | ArtifactResolutionException
-                | DependencyResolutionException
-                | ArtifactDescriptorException e) {
-            throw new MojoExecutionException("Couldn't download artifact: " + e.getMessage(), e);
+        } catch (IOException | RuntimeException e) {
+            throw new MojoException("Couldn't download artifact: " + e.getMessage(), e);
         }
     }
 
@@ -196,7 +235,7 @@ public class ListClassesMojo extends AbstractMojo {
                 // remove .class from the end and change format to use periods instead of forward slashes
                 String className =
                         entryName.substring(0, entryName.length() - 6).replace('/', '.');
-                getLog().info(className);
+                log.info(className);
             }
         }
     }
