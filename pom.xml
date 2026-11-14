@@ -264,6 +264,7 @@ under the License.
               <exclude>src/test/resources/unit/get-test/repository/test/test/1.0/test-1.0.jar.sha1</exclude>
               <exclude>src/test/resources/unit/get-test/repository/test/test/1.0/test-1.0.pom.sha1</exclude>
               <exclude>src/it/projects/copy-unpack-remote-repositories/repo/**/*.sha1</exclude>
+              <exclude>src/it/projects/mdep-650-copy-version-range-remote-repositories/repo/**/*.sha1</exclude>
               <!--
                 Files with test data.
               -->
