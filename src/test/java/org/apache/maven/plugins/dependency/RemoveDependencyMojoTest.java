@@ -25,20 +25,16 @@ import java.nio.file.Files;
 import java.util.Arrays;
 import java.util.Collections;
 
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.Model;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugin.logging.Log;
-import org.apache.maven.project.MavenProject;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.Session;
+import org.apache.maven.api.model.Model;
+import org.apache.maven.api.plugin.Log;
+import org.apache.maven.api.plugin.MojoException;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
-import static org.apache.maven.api.plugin.testing.MojoExtension.setVariableValueToObject;
 import static org.junit.jupiter.api.Assertions.assertDoesNotThrow;
-import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
@@ -52,19 +48,33 @@ class RemoveDependencyMojoTest {
     @TempDir
     File tempDir;
 
-    private MavenSession session;
-    private BuildContext buildContext;
-    private MavenProject project;
+    private Project project;
     private RemoveDependencyMojo mojo;
 
     @BeforeEach
-    void setUp() {
-        session = mock(MavenSession.class);
-        buildContext = mock(BuildContext.class);
-        project = mock(MavenProject.class);
-        when(buildContext.isIncremental()).thenReturn(false);
+    void setUp() throws Exception {
+        project = mock(Project.class);
+        when(project.getModel()).thenReturn(Model.newBuilder().build());
 
-        mojo = new RemoveDependencyMojo(session, buildContext, project);
+        mojo = new RemoveDependencyMojo();
+        setVariableValueToObject(mojo, "session", mock(Session.class));
+        setVariableValueToObject(mojo, "project", project);
+        setVariableValueToObject(mojo, "log", mock(Log.class));
+    }
+
+    /** Sets a field of the mojo or of {@link AbstractDependencyMojo}, which the mojo has no setters for. */
+    private static void setVariableValueToObject(Object object, String name, Object value) throws Exception {
+        for (Class<?> type = object.getClass(); type != null; type = type.getSuperclass()) {
+            try {
+                java.lang.reflect.Field field = type.getDeclaredField(name);
+                field.setAccessible(true);
+                field.set(object, value);
+                return;
+            } catch (NoSuchFieldException e) {
+                // look in the superclass
+            }
+        }
+        throw new NoSuchFieldException(name);
     }
 
     private File createTempPom(String content) throws IOException {
@@ -87,21 +97,17 @@ class RemoveDependencyMojoTest {
                 + "  </dependencies>\n"
                 + "</project>\n";
         File pomFile = createTempPom(pom);
-        when(project.getFile()).thenReturn(pomFile);
-        when(project.getModules()).thenReturn(Collections.emptyList());
+        when(project.getPomPath()).thenReturn(pomFile.toPath());
 
-        // Original model has the interpolated dependency
-        Model originalModel = new Model();
-        Dependency dep = new Dependency();
-        dep.setGroupId("com.example");
-        dep.setArtifactId("lib");
-        dep.setVersion("1.0");
-        originalModel.addDependency(dep);
-        when(project.getOriginalModel()).thenReturn(originalModel);
+        // the property resolves to the group of the dependency
+        when(project.getModel())
+                .thenReturn(Model.newBuilder()
+                        .properties(Collections.singletonMap("some.group", "com.example"))
+                        .build());
 
         setVariableValueToObject(mojo, "gav", "com.example:lib");
 
-        MojoFailureException ex = assertThrows(MojoFailureException.class, () -> mojo.execute());
+        MojoException ex = assertThrows(MojoException.class, () -> mojo.execute());
         assertTrue(ex.getMessage().contains("property references"));
     }
 
@@ -117,16 +123,11 @@ class RemoveDependencyMojoTest {
                 + "  </dependencies>\n"
                 + "</project>\n";
         File pomFile = createTempPom(pom);
-        when(project.getFile()).thenReturn(pomFile);
-        when(project.getModules()).thenReturn(Collections.emptyList());
-
-        // Original model also doesn't have it
-        Model originalModel = new Model();
-        when(project.getOriginalModel()).thenReturn(originalModel);
+        when(project.getPomPath()).thenReturn(pomFile.toPath());
 
         setVariableValueToObject(mojo, "gav", "nonexistent:lib");
 
-        MojoFailureException ex = assertThrows(MojoFailureException.class, () -> mojo.execute());
+        MojoException ex = assertThrows(MojoException.class, () -> mojo.execute());
         assertTrue(ex.getMessage().contains("Dependency nonexistent:lib not found in <dependencies>"), ex.getMessage());
     }
 
@@ -150,8 +151,7 @@ class RemoveDependencyMojoTest {
                 + "  </dependencies>\n"
                 + "</project>\n";
         File pomFile = createTempPom(pom);
-        when(project.getFile()).thenReturn(pomFile);
-        when(project.getModules()).thenReturn(Collections.emptyList());
+        when(project.getPomPath()).thenReturn(pomFile.toPath());
 
         setVariableValueToObject(mojo, "gav", "com.example:lib");
         setVariableValueToObject(mojo, "type", "test-jar");
@@ -164,57 +164,6 @@ class RemoveDependencyMojoTest {
     }
 
     @Test
-    void modelSyncPreservesOtherVariantsOnRemove() throws Exception {
-        String pom = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
-                + "<project>\n"
-                + "  <dependencies>\n"
-                + "    <dependency>\n"
-                + "      <groupId>com.example</groupId>\n"
-                + "      <artifactId>lib</artifactId>\n"
-                + "      <version>1.0</version>\n"
-                + "    </dependency>\n"
-                + "    <dependency>\n"
-                + "      <groupId>com.example</groupId>\n"
-                + "      <artifactId>lib</artifactId>\n"
-                + "      <version>1.0</version>\n"
-                + "      <type>test-jar</type>\n"
-                + "    </dependency>\n"
-                + "  </dependencies>\n"
-                + "</project>\n";
-        File pomFile = createTempPom(pom);
-        when(project.getFile()).thenReturn(pomFile);
-        when(project.getModules()).thenReturn(Collections.emptyList());
-
-        // Set up in-memory model with both variants
-        Model model = new Model();
-        Dependency jarDep = new Dependency();
-        jarDep.setGroupId("com.example");
-        jarDep.setArtifactId("lib");
-        jarDep.setVersion("1.0");
-        Dependency testJarDep = new Dependency();
-        testJarDep.setGroupId("com.example");
-        testJarDep.setArtifactId("lib");
-        testJarDep.setVersion("1.0");
-        testJarDep.setType("test-jar");
-        model.addDependency(jarDep);
-        model.addDependency(testJarDep);
-        when(project.getModel()).thenReturn(model);
-
-        // Remove only the test-jar variant
-        setVariableValueToObject(mojo, "gav", "com.example:lib");
-        setVariableValueToObject(mojo, "type", "test-jar");
-
-        mojo.execute();
-
-        // In-memory model should still have the jar variant
-        assertEquals(1, model.getDependencies().size(), "model should have 1 dependency remaining");
-        assertTrue(
-                "jar".equals(model.getDependencies().get(0).getType())
-                        || model.getDependencies().get(0).getType() == null,
-                "remaining dependency should be the jar variant");
-    }
-
-    @Test
     void profileNotFoundThrowsClearError() throws Exception {
         String pom = "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n"
                 + "<project>\n"
@@ -224,14 +173,12 @@ class RemoveDependencyMojoTest {
                 + "    </profile>\n"
                 + "  </profiles>\n"
                 + "</project>\n";
-        when(project.getFile()).thenReturn(createTempPom(pom));
-        Model originalModel = new Model();
-        when(project.getOriginalModel()).thenReturn(originalModel);
+        when(project.getPomPath()).thenReturn(createTempPom(pom).toPath());
 
         setVariableValueToObject(mojo, "gav", "com.example:lib");
         setVariableValueToObject(mojo, "profile", "nonexistent");
 
-        MojoFailureException ex = assertThrows(MojoFailureException.class, () -> mojo.execute());
+        MojoException ex = assertThrows(MojoException.class, () -> mojo.execute());
         assertTrue(ex.getMessage().contains("Profile 'nonexistent' not found"));
     }
 
@@ -239,14 +186,12 @@ class RemoveDependencyMojoTest {
     void profileNotFoundWhenNoProfilesSectionThrowsClearError() throws Exception {
         String pom =
                 "<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n" + "<project>\n" + "  <dependencies/>\n" + "</project>\n";
-        when(project.getFile()).thenReturn(createTempPom(pom));
-        Model originalModel = new Model();
-        when(project.getOriginalModel()).thenReturn(originalModel);
+        when(project.getPomPath()).thenReturn(createTempPom(pom).toPath());
 
         setVariableValueToObject(mojo, "gav", "com.example:lib");
         setVariableValueToObject(mojo, "profile", "dev");
 
-        MojoFailureException ex = assertThrows(MojoFailureException.class, () -> mojo.execute());
+        MojoException ex = assertThrows(MojoException.class, () -> mojo.execute());
         assertTrue(ex.getMessage().contains("Profile 'dev' not found"));
     }
 
@@ -267,9 +212,7 @@ class RemoveDependencyMojoTest {
                 + "  </profiles>\n"
                 + "</project>\n";
         File pomFile = createTempPom(pom);
-        when(project.getFile()).thenReturn(pomFile);
-        Model originalModel = new Model();
-        when(project.getOriginalModel()).thenReturn(originalModel);
+        when(project.getPomPath()).thenReturn(pomFile.toPath());
 
         setVariableValueToObject(mojo, "gav", "com.example:lib");
         setVariableValueToObject(mojo, "profile", "dev");
@@ -300,9 +243,10 @@ class RemoveDependencyMojoTest {
                 + "  </dependencyManagement>\n"
                 + "</project>\n";
         File pomFile = createTempPom(parentPom);
-        when(project.getFile()).thenReturn(pomFile);
-        when(project.getBasedir()).thenReturn(tempDir);
-        when(project.getModules()).thenReturn(Arrays.asList("child-a"));
+        when(project.getPomPath()).thenReturn(pomFile.toPath());
+        when(project.getBasedir()).thenReturn(tempDir.toPath());
+        when(project.getModel())
+                .thenReturn(Model.newBuilder().modules(Arrays.asList("child-a")).build());
 
         // Child module POM that references the dependency without a version
         File childDir = new File(tempDir, "child-a");
@@ -351,11 +295,14 @@ class RemoveDependencyMojoTest {
                 + "  </dependencyManagement>\n"
                 + "</project>\n";
         File pomFile = createTempPom(parentPom);
-        when(project.getFile()).thenReturn(pomFile);
-        when(project.getBasedir()).thenReturn(tempDir);
-        when(project.getModules()).thenReturn(Arrays.asList("child-a/my-pom.xml"));
+        when(project.getPomPath()).thenReturn(pomFile.toPath());
+        when(project.getBasedir()).thenReturn(tempDir.toPath());
+        when(project.getModel())
+                .thenReturn(Model.newBuilder()
+                        .modules(Arrays.asList("child-a/my-pom.xml"))
+                        .build());
         Log log = mock(Log.class);
-        mojo.setLog(log);
+        setVariableValueToObject(mojo, "log", log);
 
         File childDir = new File(tempDir, "child-a");
         childDir.mkdirs();
@@ -382,19 +329,21 @@ class RemoveDependencyMojoTest {
 
     @Test
     void missingGavFails() throws Exception {
-        when(project.getFile()).thenReturn(createTempPom("<project></project>"));
+        when(project.getPomPath())
+                .thenReturn(createTempPom("<project></project>").toPath());
 
-        MojoFailureException ex = assertThrows(MojoFailureException.class, () -> mojo.execute());
+        MojoException ex = assertThrows(MojoException.class, () -> mojo.execute());
         assertTrue(ex.getMessage().contains("You must specify -Dgav=groupId:artifactId"));
     }
 
     @Test
     void malformedGavFails() throws Exception {
-        when(project.getFile()).thenReturn(createTempPom("<project></project>"));
+        when(project.getPomPath())
+                .thenReturn(createTempPom("<project></project>").toPath());
 
         setVariableValueToObject(mojo, "gav", "only-one-part");
 
-        MojoFailureException ex = assertThrows(MojoFailureException.class, () -> mojo.execute());
+        MojoException ex = assertThrows(MojoException.class, () -> mojo.execute());
         assertTrue(ex.getMessage().contains("GAV"));
     }
 
@@ -412,15 +361,12 @@ class RemoveDependencyMojoTest {
                 + "    </dependencies>\n"
                 + "  </dependencyManagement>\n"
                 + "</project>\n";
-        when(project.getFile()).thenReturn(createTempPom(pom));
-        when(project.getModules()).thenReturn(Collections.emptyList());
-        Model originalModel = new Model();
-        when(project.getOriginalModel()).thenReturn(originalModel);
+        when(project.getPomPath()).thenReturn(createTempPom(pom).toPath());
 
         setVariableValueToObject(mojo, "gav", "nonexistent:lib");
         setVariableValueToObject(mojo, "managed", true);
 
-        MojoFailureException ex = assertThrows(MojoFailureException.class, () -> mojo.execute());
+        MojoException ex = assertThrows(MojoException.class, () -> mojo.execute());
         assertTrue(ex.getMessage().contains("not found"));
         assertTrue(ex.getMessage().contains("<dependencyManagement>"), "error should mention correct section");
     }

@@ -143,18 +143,16 @@ under the License.
       <scope>provided</scope>
     </dependency>
 
-    <!-- domtrip: used by the tests of the POM editing, for the add and remove goals that are not ported yet -->
+    <!-- domtrip: edits the POM for the add and remove goals -->
     <dependency>
       <groupId>eu.maveniverse.maven.domtrip</groupId>
       <artifactId>domtrip-maven</artifactId>
       <version>1.8.0</version>
-      <scope>test</scope>
     </dependency>
     <dependency>
       <groupId>eu.maveniverse.maven.domtrip</groupId>
       <artifactId>domtrip-core</artifactId>
       <version>1.8.0</version>
-      <scope>test</scope>
     </dependency>
 
     <!-- plexus -->
@@ -330,13 +328,12 @@ under the License.
             <testInclude>**/exclusion/ExclusionCheckerTest.java</testInclude>
             <testInclude>**/pom/*Test.java</testInclude>
             <testInclude>**/resolvers/ExcludeReactorProjects*Test.java</testInclude>
+            <testInclude>**/AddDependencyMojoTest.java</testInclude>
+            <testInclude>**/RemoveDependencyMojoTest.java</testInclude>
           </testIncludes>
           <excludes>
             <!-- port to reporting-impl 5.0.0-SNAPSHOT compiles, but fails at run time, see the findings -->
             <exclude>**/analyze/AnalyzeReport*.java</exclude>
-            <exclude>**/dependency/AddDependencyMojo.java</exclude>
-            <exclude>**/dependency/RemoveDependencyMojo.java</exclude>
-            <exclude>**/dependency/ListRepositoriesMojo.java</exclude>
           </excludes>
         </configuration>
       </plugin>

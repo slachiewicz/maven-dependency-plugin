@@ -18,34 +18,21 @@
  */
 package org.apache.maven.plugins.dependency;
 
-import javax.inject.Inject;
-
 import java.util.Collection;
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.HashSet;
-import java.util.List;
+import java.util.LinkedHashMap;
 import java.util.Map;
-import java.util.Optional;
-import java.util.Set;
-import java.util.stream.Collectors;
 
-import org.apache.maven.RepositoryUtils;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.DependencyManagement;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.project.MavenProject;
-import org.eclipse.aether.RepositorySystem;
-import org.eclipse.aether.artifact.ArtifactTypeRegistry;
-import org.eclipse.aether.collection.CollectRequest;
-import org.eclipse.aether.collection.CollectResult;
-import org.eclipse.aether.collection.DependencyCollectionException;
-import org.eclipse.aether.graph.DependencyNode;
-import org.eclipse.aether.graph.DependencyVisitor;
-import org.eclipse.aether.repository.RemoteRepository;
-import org.eclipse.aether.util.graph.visitor.TreeDependencyVisitor;
-import org.sonatype.plexus.build.incremental.BuildContext;
+import org.apache.maven.api.Node;
+import org.apache.maven.api.PathScope;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.RemoteRepository;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.services.DependencyResolver;
+import org.apache.maven.api.services.DependencyResolverException;
+import org.apache.maven.api.services.DependencyResolverRequest;
+import org.apache.maven.api.services.DependencyResolverResult;
+import org.apache.maven.api.services.ProjectManager;
 
 /**
  * Goal that collects all project dependencies and then lists the dependency repositories used by the build and
@@ -54,109 +41,76 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  * @author <a href="mailto:brianf@apache.org">Brian Fox</a>
  * @since 2.2
  */
-@Mojo(name = "list-repositories", threadSafe = true)
+@Mojo(name = "list-repositories")
 public class ListRepositoriesMojo extends AbstractDependencyMojo {
-
-    private final RepositorySystem repositorySystem;
-
-    @Inject
-    public ListRepositoriesMojo(
-            MavenSession session, BuildContext buildContext, MavenProject project, RepositorySystem repositorySystem) {
-        super(session, buildContext, project);
-        this.repositorySystem = repositorySystem;
-    }
 
     /**
      * Displays a list of the repositories used by this build.
      *
-     * @throws MojoExecutionException with a message if an error occurs
+     * @throws MojoException with a message if an error occurs
      */
     @Override
-    protected void doExecute() throws MojoExecutionException {
+    protected void doExecute() throws MojoException {
+        Project project = getProject();
 
-        CollectRequest request = new CollectRequest();
-        request.setRepositories(getProject().getRemoteProjectRepositories());
-        request.setRootArtifact(RepositoryUtils.toArtifact(getProject().getArtifact()));
-
-        ArtifactTypeRegistry artifactTypeRegistry =
-                session.getRepositorySession().getArtifactTypeRegistry();
-
-        request.setDependencies(getProject().getDependencies().stream()
-                .map(d -> RepositoryUtils.toDependency(d, artifactTypeRegistry))
-                .collect(Collectors.toList()));
-
-        request.setManagedDependencies(Optional.ofNullable(getProject().getDependencyManagement())
-                .map(DependencyManagement::getDependencies)
-                .orElseGet(Collections::emptyList)
-                .stream()
-                .map(d -> RepositoryUtils.toDependency(d, artifactTypeRegistry))
-                .collect(Collectors.toList()));
-
+        Map<String, RemoteRepository> repositories = new LinkedHashMap<>();
         try {
-            CollectResult collectResult = repositorySystem.collectDependencies(session.getRepositorySession(), request);
-            Set<RemoteRepository> repositories = new HashSet<>();
-            collectResult.getRoot().accept(new TreeDependencyVisitor(new DependencyVisitor() {
-                @Override
-                public boolean visitEnter(DependencyNode node) {
-                    repositories.addAll(node.getRepositories());
-                    debugLogNodeRepo(node);
-                    return true;
-                }
+            // only collect the graph, nothing is downloaded
+            DependencyResolverResult result = session.getService(DependencyResolver.class)
+                    .collect(DependencyResolverRequest.builder()
+                            .session(session)
+                            .requestType(DependencyResolverRequest.RequestType.COLLECT)
+                            .project(project)
+                            .pathScope(PathScope.TEST_RUNTIME)
+                            .build());
+            collectRepositories(result.getRoot(), repositories);
+        } catch (DependencyResolverException e) {
+            throw new MojoException(e.getMessage(), e);
+        }
 
-                @Override
-                public boolean visitLeave(DependencyNode node) {
-                    return true;
-                }
-            }));
+        Map<String, RemoteRepository> pluginRepositories = new LinkedHashMap<>();
+        session.getService(ProjectManager.class)
+                .getRemotePluginRepositories(project)
+                .forEach(repo -> pluginRepositories.put(key(repo), repo));
 
-            Set<RemoteRepository> pluginRepositories =
-                    new HashSet<>(Optional.ofNullable(getProject().getRemotePluginRepositories())
-                            .orElseGet(Collections::emptyList));
+        if (repositories.isEmpty() && pluginRepositories.isEmpty()) {
+            getLog().info("No remote repository is used by this build." + System.lineSeparator());
+            return;
+        }
 
-            if (repositories.isEmpty() && pluginRepositories.isEmpty()) {
-                getLog().info("No remote repository is used by this build." + System.lineSeparator());
-                return;
-            }
+        StringBuilder message = new StringBuilder();
+        prepareRemoteRepositoriesList(
+                message, "Project remote repositories used by this build:", repositories.values());
+        prepareRemoteRepositoriesList(message, "Plugin repositories used by this build:", pluginRepositories.values());
 
-            StringBuilder message = new StringBuilder();
-            prepareRemoteRepositoriesList(message, "Project remote repositories used by this build:", repositories);
-            prepareRemoteRepositoriesList(message, "Plugin repositories used by this build:", pluginRepositories);
+        getLog().info(message);
+    }
 
-            getLog().info(message);
-
-        } catch (DependencyCollectionException e) {
-            throw new MojoExecutionException(e.getMessage(), e);
+    private void collectRepositories(Node node, Map<String, RemoteRepository> repositories) {
+        for (RemoteRepository repo : node.getRemoteRepositories()) {
+            repositories.putIfAbsent(key(repo), repo);
+        }
+        debugLogNodeRepo(node);
+        for (Node child : node.getChildren()) {
+            collectRepositories(child, repositories);
         }
     }
 
-    private void debugLogNodeRepo(DependencyNode node) {
+    private static String key(RemoteRepository repo) {
+        return repo.getId() + '|' + repo.getUrl();
+    }
+
+    private void debugLogNodeRepo(Node node) {
         if (!getLog().isDebugEnabled()) {
             return;
         }
 
-        getLog().debug("Node: " + node + " resolved from:");
-        node.getRepositories().forEach(repo -> {
-            if (repo.getMirroredRepositories().isEmpty()) {
-                getLog().debug(" - " + repo);
-            } else {
-                getLog().debug(" - " + repo + " as mirror for:");
-                repo.getMirroredRepositories().forEach(mrepo -> getLog().debug("    - " + mrepo));
-            }
-        });
+        getLog().debug("Node: " + node.asString() + " resolved from:");
+        node.getRemoteRepositories().forEach(repo -> getLog().debug(" - " + describe(repo)));
     }
 
-    private void prepareRemoteMirrorRepositoriesList(
-            StringBuilder message, Collection<RemoteRepository> remoteProjectRepositories) {
-
-        Map<RemoteRepository, RemoteRepository> mirrorMap = new HashMap<>();
-        remoteProjectRepositories.forEach(
-                repo -> repo.getMirroredRepositories().forEach(mrepo -> mirrorMap.put(mrepo, repo)));
-
-        mirrorMap.forEach((repo, mirror) -> message.append(" * ")
-                .append(repo)
-                .append(" mirrored by ")
-                .append(mirror)
-                .append(System.lineSeparator()));
+    private static String describe(RemoteRepository repo) {
+        return repo.getId() + " (" + repo.getUrl() + ", " + repo.getType() + ")";
     }
 
     private void prepareRemoteRepositoriesList(
@@ -166,15 +120,7 @@ public class ListRepositoriesMojo extends AbstractDependencyMojo {
         }
 
         message.append(heading).append(System.lineSeparator());
-
-        Map<Boolean, List<RemoteRepository>> repoGroupByMirrors = repositories.stream()
-                .collect(Collectors.groupingBy(
-                        repo -> repo.getMirroredRepositories().isEmpty()));
-
-        repoGroupByMirrors
-                .getOrDefault(Boolean.TRUE, Collections.emptyList())
-                .forEach(repo -> message.append(" * ").append(repo).append(System.lineSeparator()));
-        prepareRemoteMirrorRepositoriesList(
-                message, repoGroupByMirrors.getOrDefault(Boolean.FALSE, Collections.emptyList()));
+        repositories.forEach(
+                repo -> message.append(" * ").append(describe(repo)).append(System.lineSeparator()));
     }
 }

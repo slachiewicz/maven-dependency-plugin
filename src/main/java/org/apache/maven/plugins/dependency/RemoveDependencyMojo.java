@@ -18,12 +18,8 @@
  */
 package org.apache.maven.plugins.dependency;
 
-import javax.inject.Inject;
-
-import java.io.File;
 import java.io.IOException;
 import java.io.OutputStream;
-import java.io.Reader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -34,20 +30,11 @@ import eu.maveniverse.domtrip.Document;
 import eu.maveniverse.domtrip.Element;
 import eu.maveniverse.domtrip.maven.Coordinates;
 import eu.maveniverse.domtrip.maven.PomEditor;
-import org.apache.maven.execution.MavenSession;
-import org.apache.maven.model.Dependency;
-import org.apache.maven.model.DependencyManagement;
-import org.apache.maven.model.Model;
-import org.apache.maven.model.io.xpp3.MavenXpp3Reader;
-import org.apache.maven.plugin.MojoExecutionException;
-import org.apache.maven.plugin.MojoFailureException;
-import org.apache.maven.plugins.annotations.Mojo;
-import org.apache.maven.plugins.annotations.Parameter;
+import org.apache.maven.api.Project;
+import org.apache.maven.api.plugin.MojoException;
+import org.apache.maven.api.plugin.annotations.Mojo;
+import org.apache.maven.api.plugin.annotations.Parameter;
 import org.apache.maven.plugins.dependency.pom.DependencyEntry;
-import org.apache.maven.project.MavenProject;
-import org.codehaus.plexus.util.xml.XmlStreamReader;
-import org.codehaus.plexus.util.xml.pull.XmlPullParserException;
-import org.sonatype.plexus.build.incremental.BuildContext;
 
 /**
  * Removes a dependency from the project's {@code pom.xml}.
@@ -61,7 +48,7 @@ import org.sonatype.plexus.build.incremental.BuildContext;
  *
  * @since 3.11.0
  */
-@Mojo(name = "remove", requiresProject = true, threadSafe = true)
+@Mojo(name = "remove")
 public class RemoveDependencyMojo extends AbstractDependencyMojo {
 
     /**
@@ -111,26 +98,19 @@ public class RemoveDependencyMojo extends AbstractDependencyMojo {
     @Parameter(property = "profile")
     private String profile;
 
-    @Inject
-    public RemoveDependencyMojo(MavenSession session, BuildContext buildContext, MavenProject project) {
-        super(session, buildContext, project);
-    }
-
     @Override
-    protected void doExecute() throws MojoExecutionException, MojoFailureException {
+    protected void doExecute() throws MojoException {
         DependencyEntry coords = resolveCoordinates();
 
         boolean targetManaged = managed;
-        MavenProject targetProject = getProject();
-        File pomFile = targetProject.getFile();
+        Project targetProject = getProject();
+        Path pomFile = targetProject.getPomPath();
         if (pomFile == null) {
-            throw new MojoExecutionException("Cannot remove dependency: project has no POM file to modify.");
+            throw new MojoException("Cannot remove dependency: project has no POM file to modify.");
         }
 
         // Safety check for managed dependency removal in parent POM
-        if (targetManaged
-                && targetProject.getModules() != null
-                && !targetProject.getModules().isEmpty()) {
+        if (targetManaged && !targetProject.getModel().getModules().isEmpty()) {
             checkChildModuleDependencies(targetProject, coords.getGroupId(), coords.getArtifactId());
         }
 
@@ -147,73 +127,46 @@ public class RemoveDependencyMojo extends AbstractDependencyMojo {
                 // Cross-reference with resolved model to detect property-interpolated coords
                 if (existsInResolvedModel(targetProject, coords, targetManaged)) {
                     String section = targetManaged ? "<dependencyManagement>" : "<dependencies>";
-                    throw new MojoFailureException("Dependency " + coords.getGroupId() + ":"
+                    throw new MojoException("Dependency " + coords.getGroupId() + ":"
                             + coords.getArtifactId()
                             + " exists in " + section + " but uses property references in the POM. "
                             + "Please remove it manually.");
                 }
                 String section = targetManaged ? "<dependencyManagement>" : "<dependencies>";
-                throw new MojoFailureException("Dependency " + coords.getGroupId() + ":" + coords.getArtifactId()
+                throw new MojoException("Dependency " + coords.getGroupId() + ":" + coords.getArtifactId()
                         + " not found in " + section + ".");
             }
 
             savePomEditor(editor, pomFile);
 
-            // Sync in-memory model so chained goals see the change
-            Model model = targetProject.getModel();
-            if (model != null) {
-                String removeType =
-                        (coords.getType() != null && !coords.getType().isEmpty()) ? coords.getType() : "jar";
-                String removeClassifier = (coords.getClassifier() != null
-                                && !coords.getClassifier().isEmpty())
-                        ? coords.getClassifier()
-                        : "";
-                if (targetManaged) {
-                    DependencyManagement dm = model.getDependencyManagement();
-                    if (dm != null && dm.getDependencies() != null) {
-                        dm.getDependencies()
-                                .removeIf(d -> coords.getGroupId().equals(d.getGroupId())
-                                        && coords.getArtifactId().equals(d.getArtifactId())
-                                        && removeType.equals(d.getType() != null ? d.getType() : "jar")
-                                        && removeClassifier.equals(d.getClassifier() != null ? d.getClassifier() : ""));
-                    }
-                } else if (model.getDependencies() != null) {
-                    model.getDependencies()
-                            .removeIf(d -> coords.getGroupId().equals(d.getGroupId())
-                                    && coords.getArtifactId().equals(d.getArtifactId())
-                                    && removeType.equals(d.getType() != null ? d.getType() : "jar")
-                                    && removeClassifier.equals(d.getClassifier() != null ? d.getClassifier() : ""));
-                }
-            }
-
             getLog().info("Removed dependency " + coords.getGroupId() + ":" + coords.getArtifactId() + " from "
-                    + pomFile.getName());
+                    + pomFile.getFileName());
         } catch (IOException e) {
-            throw new MojoExecutionException("Failed to modify POM file: " + pomFile, e);
+            throw new MojoException("Failed to modify POM file: " + pomFile, e);
         }
     }
 
-    private PomEditor.Dependencies dependenciesFor(PomEditor editor, File pomFile) throws MojoFailureException {
+    private PomEditor.Dependencies dependenciesFor(PomEditor editor, Path pomFile) throws MojoException {
         PomEditor.Dependencies dependencies = editor.dependencies();
         if (profile == null || profile.isEmpty()) {
             return dependencies;
         }
         Element profileElement = editor.profiles().findProfile(profile);
         if (profileElement == null) {
-            throw new MojoFailureException("Profile '" + profile + "' not found in " + pomFile.getName() + ".");
+            throw new MojoException("Profile '" + profile + "' not found in " + pomFile.getFileName() + ".");
         }
         return dependencies.forProfile(profileElement);
     }
 
-    private static PomEditor loadPomEditor(File pomFile) throws IOException {
+    private static PomEditor loadPomEditor(Path pomFile) throws IOException {
         try {
-            String content = new String(Files.readAllBytes(pomFile.toPath()), StandardCharsets.UTF_8);
+            String content = new String(Files.readAllBytes(pomFile), StandardCharsets.UTF_8);
             String upper = content.toUpperCase(Locale.ROOT);
             if (upper.contains("<!DOCTYPE") || upper.contains("<!ENTITY")) {
                 throw new IOException("DOCTYPE/ENTITY declarations are not allowed in POM files (security risk)");
             }
 
-            PomEditor editor = new PomEditor(Document.of(pomFile.toPath()));
+            PomEditor editor = new PomEditor(Document.of(pomFile));
             String rootName = editor.root().name();
             if (!"project".equals(rootName)) {
                 throw new IOException(
@@ -225,33 +178,32 @@ public class RemoveDependencyMojo extends AbstractDependencyMojo {
         }
     }
 
-    private static void savePomEditor(PomEditor editor, File pomFile) throws IOException {
-        Path target = pomFile.toPath();
-        File tempFile = File.createTempFile("pom", ".xml.tmp", pomFile.getParentFile());
+    private static void savePomEditor(PomEditor editor, Path pomFile) throws IOException {
+        Path tempFile = Files.createTempFile(pomFile.toAbsolutePath().getParent(), "pom", ".xml.tmp");
         boolean success = false;
         try {
-            try (OutputStream os = Files.newOutputStream(tempFile.toPath())) {
+            try (OutputStream os = Files.newOutputStream(tempFile)) {
                 editor.document().toXml(os);
             }
-            Files.move(tempFile.toPath(), target, StandardCopyOption.REPLACE_EXISTING);
+            Files.move(tempFile, pomFile, StandardCopyOption.REPLACE_EXISTING);
             success = true;
         } finally {
             if (!success) {
-                Files.deleteIfExists(tempFile.toPath());
+                Files.deleteIfExists(tempFile);
             }
         }
     }
 
-    private DependencyEntry resolveCoordinates() throws MojoFailureException {
+    private DependencyEntry resolveCoordinates() throws MojoException {
         if (gav == null || gav.isEmpty()) {
-            throw new MojoFailureException("You must specify -Dgav=groupId:artifactId");
+            throw new MojoException("You must specify -Dgav=groupId:artifactId");
         }
 
         DependencyEntry coords;
         try {
             coords = DependencyEntry.parse(gav);
         } catch (IllegalArgumentException e) {
-            throw new MojoFailureException(e.getMessage());
+            throw new MojoException(e.getMessage());
         }
 
         // Explicit parameters override GAV shorthand values
@@ -265,41 +217,39 @@ public class RemoveDependencyMojo extends AbstractDependencyMojo {
         try {
             coords.validate();
         } catch (IllegalArgumentException e) {
-            throw new MojoFailureException(e.getMessage());
+            throw new MojoException(e.getMessage());
         }
 
         return coords;
     }
 
-    private void checkChildModuleDependencies(MavenProject parentProject, String depGroupId, String depArtifactId) {
+    private void checkChildModuleDependencies(Project parentProject, String depGroupId, String depArtifactId) {
         if (parentProject.getBasedir() == null) {
             getLog().debug("Parent project basedir is null, skipping child module dependency check");
             return;
         }
         StringBuilder affected = new StringBuilder();
-        MavenXpp3Reader pomReader = new MavenXpp3Reader();
 
-        for (String moduleName : parentProject.getModules()) {
-            File modulePom = resolveModulePom(parentProject.getBasedir(), moduleName);
-            if (!modulePom.exists()) {
+        for (String moduleName : parentProject.getModel().getModules()) {
+            Path modulePom = resolveModulePom(parentProject.getBasedir(), moduleName);
+            if (!Files.exists(modulePom)) {
                 continue;
             }
-            try (Reader reader = new XmlStreamReader(modulePom)) {
-                Model model = pomReader.read(reader);
-                if (model.getDependencies() != null) {
-                    for (Dependency dep : model.getDependencies()) {
-                        if (depGroupId.equals(dep.getGroupId())
-                                && depArtifactId.equals(dep.getArtifactId())
-                                && (dep.getVersion() == null || dep.getVersion().isEmpty())) {
-                            if (affected.length() > 0) {
-                                affected.append(", ");
-                            }
-                            affected.append(moduleName);
-                            break;
-                        }
+            try {
+                PomEditor editor = loadPomEditor(modulePom);
+                Element dependencies = editor.findChildElement(editor.root(), "dependencies");
+                if (dependencies != null
+                        && dependencies
+                                .childElements("dependency")
+                                .anyMatch(dep -> depGroupId.equals(dep.childTextOr("groupId", null))
+                                        && depArtifactId.equals(dep.childTextOr("artifactId", null))
+                                        && dep.childTextOr("version", "").isEmpty())) {
+                    if (affected.length() > 0) {
+                        affected.append(", ");
                     }
+                    affected.append(moduleName);
                 }
-            } catch (IOException | XmlPullParserException e) {
+            } catch (IOException e) {
                 getLog().debug("Could not read module POM: " + modulePom + " - " + e.getMessage());
             }
         }
@@ -310,11 +260,11 @@ public class RemoveDependencyMojo extends AbstractDependencyMojo {
         }
     }
 
-    private static File resolveModulePom(File parentBasedir, String moduleName) {
-        File modulePath = new File(parentBasedir, moduleName);
-        if (modulePath.isFile() || moduleName.endsWith(".xml")) {
+    private static Path resolveModulePom(Path parentBasedir, String moduleName) {
+        Path modulePath = parentBasedir.resolve(moduleName);
+        if (Files.isRegularFile(modulePath) || moduleName.endsWith(".xml")) {
             return modulePath;
         }
-        return new File(modulePath, "pom.xml");
+        return modulePath.resolve("pom.xml");
     }
 }
