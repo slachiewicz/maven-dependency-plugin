@@ -27,3 +27,5 @@ jobs:
     uses: apache/maven-gh-actions-shared/.github/workflows/maven-verify.yml@v5
     with:
       maven4-enabled: true
+      # include the oldest supported Maven line: the get-classpath IT expects the Resolver 1.x order there
+      maven-matrix: '[ "3.9.16", "3.10.1" ]'

@@ -36,14 +36,26 @@ String read( String name )
 // The artifact is resolved as for a project that depends on it, in the order of the running Maven's resolver: the
 // artifact first, then its runtime dependencies. The test, provided and optional dependencies of the artifact and the
 // system dependency of its dependency are not part of the classpath. The artifact's own dependencyManagement,
-// which sets the version of the leaf to 2.0, is applied by Maven 4 only.
+// which sets the version of the leaf to 2.0, is applied by Maven 4 and later.
 String mavenVersion = new File( basedir, "build.log" ).readLines().find { it.startsWith( "Apache Maven " ) };
 assert mavenVersion != null : "No Maven version in build.log";
-String leafVersion = mavenVersion.startsWith( "Apache Maven 4" ) ? "2.0" : "1.0";
+def version = ( mavenVersion =~ /Apache Maven (\d+)\.(\d+)/ );
+assert version.find() : "Could not parse a Maven version from: " + mavenVersion;
+int major = version.group( 1 ) as int;
+int minor = version.group( 2 ) as int;
+
+String leafVersion = major >= 4 ? "2.0" : "1.0";
+
+// Maven 3.9 and earlier (Resolver 1.x) place a transitive dependency reached through another dependency
+// before that dependency's own siblings; Maven 3.10+ and 4 (Resolver 2.x) place it after. The IT's project
+// reaches the leaf only through the dep, so its position relative to runtime depends on the resolver line.
+boolean leafBeforeRuntime = major == 3 && minor < 10;
 
 String leaf = new File( localRepositoryPath,
     "org/apache/maven/its/dependency/get-classpath-lib-leaf/" + leafVersion + "/get-classpath-lib-leaf-" + leafVersion + ".jar" ).getPath();
-String expected = [ jar( "get-classpath-lib" ), jar( "get-classpath-lib-dep" ), jar( "get-classpath-lib-runtime" ), leaf ]
+String runtime = jar( "get-classpath-lib-runtime" );
+String expected = [ jar( "get-classpath-lib" ), jar( "get-classpath-lib-dep" ) ]
+    .plus( leafBeforeRuntime ? [ leaf, runtime ] : [ runtime, leaf ] )
     .join( File.pathSeparator );
 String actual = read( "classpath.txt" );
 assert actual.equals( expected ) : "Unexpected classpath: " + actual + ", expected: " + expected + " for " + mavenVersion;
